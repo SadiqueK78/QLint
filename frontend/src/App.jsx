@@ -748,17 +748,47 @@ function buildReportText(result) {
   return lines.join("\n");
 }
 
-function downloadReport(result) {
-  const date = new Date().toISOString().slice(0, 10);
-  const blob = new Blob([buildReportText(result)], { type: "text/plain" });
+function saveBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `qlint-report-${result.repo.replace("/", "-")}-${date}.txt`;
+  link.download = filename;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
+}
+
+function reportFilename(result, extension) {
+  const date = new Date().toISOString().slice(0, 10);
+  return `qlint-report-${result.repo.replace("/", "-")}-${date}.${extension}`;
+}
+
+function downloadReport(result) {
+  const blob = new Blob([buildReportText(result)], { type: "text/plain" });
+  saveBlob(blob, reportFilename(result, "txt"));
+}
+
+// SARIF is built server-side so the rule catalog and severity mapping stay in
+// one place. A signed-in user's scan has an id to address; an anonymous one
+// does not, so that path asks the scan endpoint to render the cached result
+// as SARIF instead.
+async function downloadSarif(result, authToken) {
+  const response =
+    result.scan_id && authToken
+      ? await fetch(`${API_BASE}/user/scans/${result.scan_id}/sarif`, {
+          headers: { Authorization: `Bearer ${authToken}` },
+        })
+      : await fetch(`${API_BASE}/scan?format=sarif`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ repo_url: `https://github.com/${result.repo}` }),
+        });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new Error(body?.detail || `HTTP ${response.status}`);
+  }
+  saveBlob(await response.blob(), reportFilename(result, "sarif"));
 }
 
 function splitFixSnippet(snippet) {
@@ -1150,6 +1180,21 @@ function ResultsView({
     ])
     .filter(([, findings]) => findings.length > 0);
 
+  const [sarifBusy, setSarifBusy] = useState(false);
+  const [sarifError, setSarifError] = useState(null);
+
+  const getSarif = async () => {
+    setSarifBusy(true);
+    setSarifError(null);
+    try {
+      await downloadSarif(result, authToken);
+    } catch (err) {
+      setSarifError(err.message || "Could not build the SARIF file.");
+    } finally {
+      setSarifBusy(false);
+    }
+  };
+
   const toggleFile = (file) =>
     setExpandedFiles((prev) => ({ ...prev, [file]: !prev[file] }));
   const toggleFix = (key) =>
@@ -1175,21 +1220,33 @@ function ResultsView({
             {result.scan_duration_seconds}s
           </div>
         </div>
-        <div className="results-actions">
-          <button
-            className="btn-ghost btn-small"
-            type="button"
-            onClick={() => downloadReport(result)}
-          >
-            Download Report
-          </button>
-          <button
-            className="btn-primary btn-small"
-            type="button"
-            onClick={onReset}
-          >
-            Scan Another Repository
-          </button>
+        <div className="results-actions-wrap">
+          <div className="results-actions">
+            <button
+              className="btn-ghost btn-small"
+              type="button"
+              onClick={() => downloadReport(result)}
+            >
+              Download Report
+            </button>
+            <button
+              className="btn-ghost btn-small"
+              type="button"
+              onClick={getSarif}
+              disabled={sarifBusy}
+              title="SARIF 2.1.0, for GitHub Code Scanning and SARIF viewers"
+            >
+              {sarifBusy ? "Building SARIF..." : "Download SARIF"}
+            </button>
+            <button
+              className="btn-primary btn-small"
+              type="button"
+              onClick={onReset}
+            >
+              Scan Another Repository
+            </button>
+          </div>
+          {sarifError && <div className="sarif-error">{sarifError}</div>}
         </div>
       </div>
 

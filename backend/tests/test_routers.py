@@ -346,3 +346,129 @@ def test_run_still_defaults_to_the_768_65_pair(benchmark_client):
     body = response.json()
     assert body["kem_results"][0]["algorithm"] == "ML-KEM-768"
     assert body["sig_results"][0]["algorithm"] == "ML-DSA-65"
+
+
+# ------------------------------------------------------------- SARIF download
+#
+# Same bare-app + fake-collection setup as the HNDL routes above.
+
+from routers import user_router as user_module
+from routers.user_router import router as user_router
+
+SARIF_SCAN = {
+    "_id": ObjectId(SCAN_ID),
+    "repo_url": "https://github.com/golang-jwt/jwt",
+    "user_id": OWNER_ID,
+    "result": {
+        "findings_by_file": {
+            "auth\\login.py": [
+                {
+                    "file": "auth\\login.py",
+                    "line": 12,
+                    "col": 0,
+                    "algorithm": "RSA",
+                    "severity": "critical",
+                }
+            ],
+            "utils/hash.py": [
+                {
+                    "file": "utils/hash.py",
+                    "line": 3,
+                    "col": 4,
+                    "algorithm": "MD5",
+                    "severity": "critical",
+                }
+            ],
+        }
+    },
+}
+
+
+@pytest.fixture
+def sarif_client(monkeypatch):
+    monkeypatch.setattr(user_module, "get_scans", lambda: FakeScans([SARIF_SCAN]))
+    app = FastAPI()
+    app.include_router(user_router)
+    return TestClient(app), app
+
+
+@pytest.fixture
+def sarif_owner(sarif_client):
+    test_client, app = sarif_client
+    app.dependency_overrides[get_current_user] = lambda: {
+        "_id": OWNER_ID,
+        "email": "owner@qlint.dev",
+    }
+    yield test_client
+    app.dependency_overrides.clear()
+
+
+def test_sarif_returns_a_valid_log_for_an_owned_scan(sarif_owner):
+    response = sarif_owner.get(f"/user/scans/{SCAN_ID}/sarif")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["version"] == "2.1.0"
+    assert body["$schema"].endswith("sarif-schema-2.1.0.json")
+
+    run = body["runs"][0]
+    assert run["tool"]["driver"]["name"] == "QLint"
+    assert len(run["results"]) == 2
+    rule_ids = {rule["id"] for rule in run["tool"]["driver"]["rules"]}
+    assert {result["ruleId"] for result in run["results"]} <= rule_ids
+
+    # The stored path uses Windows separators; the SARIF URI must not.
+    uris = [
+        result["locations"][0]["physicalLocation"]["artifactLocation"]["uri"]
+        for result in run["results"]
+    ]
+    assert sorted(uris) == ["auth/login.py", "utils/hash.py"]
+
+
+def test_sarif_sends_a_download_filename(sarif_owner):
+    response = sarif_owner.get(f"/user/scans/{SCAN_ID}/sarif")
+    disposition = response.headers["content-disposition"]
+    assert "attachment" in disposition
+    assert f"qlint-scan-{SCAN_ID}.sarif" in disposition
+    assert response.headers["content-type"].startswith("application/json")
+
+
+def test_sarif_requires_a_jwt(sarif_client):
+    test_client, _ = sarif_client
+    response = test_client.get(f"/user/scans/{SCAN_ID}/sarif")
+    assert response.status_code == 401
+
+
+def test_sarif_404s_on_another_users_scan(sarif_client):
+    test_client, app = sarif_client
+    app.dependency_overrides[get_current_user] = lambda: {
+        "_id": OTHER_ID,
+        "email": "stranger@qlint.dev",
+    }
+    response = test_client.get(f"/user/scans/{SCAN_ID}/sarif")
+    app.dependency_overrides.clear()
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Scan not found"
+
+
+def test_sarif_404s_on_an_unknown_or_malformed_scan_id(sarif_owner):
+    for scan_id in ["652f1f77bcf86cd799439099", "not-an-object-id"]:
+        response = sarif_owner.get(f"/user/scans/{scan_id}/sarif")
+        assert response.status_code == 404
+
+
+def test_sarif_of_a_scan_with_no_findings_is_still_a_valid_log(
+    sarif_client, monkeypatch
+):
+    test_client, app = sarif_client
+    empty = {**SARIF_SCAN, "result": {}}
+    monkeypatch.setattr(user_module, "get_scans", lambda: FakeScans([empty]))
+    app.dependency_overrides[get_current_user] = lambda: {
+        "_id": OWNER_ID,
+        "email": "owner@qlint.dev",
+    }
+    response = test_client.get(f"/user/scans/{SCAN_ID}/sarif")
+    app.dependency_overrides.clear()
+    assert response.status_code == 200
+    run = response.json()["runs"][0]
+    assert run["results"] == []
+    assert run["tool"]["driver"]["rules"]  # the catalog ships regardless

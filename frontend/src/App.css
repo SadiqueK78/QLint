@@ -875,9 +875,27 @@ input {
   margin-top: 4px;
 }
 
+.results-actions-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
 .results-actions {
   display: flex;
   gap: 10px;
+}
+
+.results-actions button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.sarif-error {
+  font-size: 12px;
+  color: var(--critical);
+  text-align: right;
 }
 
 .score-row {
@@ -1607,8 +1625,16 @@ input {
     gap: 12px;
   }
 
+  .results-actions-wrap {
+    align-items: stretch;
+  }
+
   .results-actions {
     flex-wrap: wrap;
+  }
+
+  .sarif-error {
+    text-align: left;
   }
 
   .score-row {

@@ -3,11 +3,13 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pymongo import DESCENDING
 from pymongo.errors import PyMongoError
 
 from auth import get_current_user, to_object_id
 from database import get_scans
+from sarif_converter import convert_to_sarif
 
 router = APIRouter(prefix="/user")
 
@@ -85,8 +87,12 @@ async def list_scans(
     }
 
 
-@router.get("/scans/{scan_id}/full")
-async def get_scan_full(scan_id: str, user: dict = Depends(get_current_user)):
+async def _owned_scan(scan_id: str, user: dict) -> dict:
+    """Fetch a scan the caller owns, or 404.
+
+    The user_id filter is what keeps one user from reading another's scan: a
+    scan owned by someone else is indistinguishable from a missing one.
+    """
     object_id = to_object_id(scan_id)
     if object_id is None:
         raise HTTPException(status_code=404, detail="Scan not found")
@@ -98,11 +104,35 @@ async def get_scan_full(scan_id: str, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=503, detail=DB_UNAVAILABLE) from exc
     if not entry:
         raise HTTPException(status_code=404, detail="Scan not found")
+    return entry
 
+
+@router.get("/scans/{scan_id}/full")
+async def get_scan_full(scan_id: str, user: dict = Depends(get_current_user)):
+    entry = await _owned_scan(scan_id, user)
     result = dict(entry.get("result") or {})
     result["scan_id"] = str(entry["_id"])
     result["created_at"] = _iso(entry.get("created_at"))
     return result
+
+
+@router.get("/scans/{scan_id}/sarif")
+async def get_scan_sarif(scan_id: str, user: dict = Depends(get_current_user)):
+    """The same report as /full, rendered as SARIF 2.1.0 for external tooling.
+
+    Served as a download so a browser hitting this URL saves a .sarif file
+    rather than rendering the JSON inline.
+    """
+    entry = await _owned_scan(scan_id, user)
+    sarif = convert_to_sarif(entry.get("result") or {})
+    return JSONResponse(
+        content=sarif,
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="qlint-scan-{scan_id}.sarif"'
+            )
+        },
+    )
 
 
 @router.delete("/scans/{scan_id}")
