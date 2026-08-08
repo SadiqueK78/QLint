@@ -4,7 +4,7 @@ Scan GitHub repositories for quantum-vulnerable cryptographic algorithms and get
 
 ## What it does
 
-QLint scans the Python, JavaScript, and TypeScript code in any public GitHub repository and detects cryptographic algorithms that will be broken (RSA, ECC, DSA, Diffie-Hellman) or weakened (AES-128, SHA-256) by quantum computers. Python detection is AST-based — it parses real syntax trees instead of grepping text, so algorithm names in comments or strings never produce false positives. JavaScript and TypeScript have no stdlib parser to lean on, so they are scanned with context-aware patterns that strip comments and string noise before matching. Every finding comes with a severity rating, the quantum attack vector, and a ready-to-use fix snippet showing the migration to the NIST-standardized post-quantum replacement (ML-KEM, ML-DSA, SLH-DSA). The whole repository is summarized into a PQC readiness score from 0 to 100.
+QLint scans the Python, JavaScript, TypeScript, and Go code in any public GitHub repository and detects cryptographic algorithms that will be broken (RSA, ECC, DSA, Diffie-Hellman) or weakened (AES-128, SHA-256) by quantum computers. Python detection is AST-based — it parses real syntax trees instead of grepping text, so algorithm names in comments or strings never produce false positives. JavaScript and TypeScript have no stdlib parser to lean on, so they are scanned with context-aware patterns that strip comments and string noise before matching. Every finding comes with a severity rating, the quantum attack vector, and a ready-to-use fix snippet showing the migration to the NIST-standardized post-quantum replacement (ML-KEM, ML-DSA, SLH-DSA). The whole repository is summarized into a PQC readiness score from 0 to 100.
 
 ## Tech Stack
 
@@ -12,47 +12,52 @@ QLint scans the Python, JavaScript, and TypeScript code in any public GitHub rep
 - **Database:** MongoDB (Motor async driver)
 - **Auth:** JWT (python-jose) + bcrypt password hashing (passlib)
 - **Frontend:** React 18, Vite
-- **Scanners:** Python `ast` module; context-aware pattern matching for JS/TS
+- **Scanners:** Python `ast` module; context-aware pattern matching for JS/TS/Go
+- **Output:** SARIF 2.1.0 (GitHub Code Scanning, VS Code) plus the native JSON report
+- **CI:** standalone CLI and a composite GitHub Action, no server or database needed
 - **Standards:** NIST FIPS 203, 204, 205 (2024)
 
 ## Project Structure
 
 ```
 QLint/
+├── .github/
+│   ├── actions/qlint-scan/action.yml   # composite Action wrapping the CLI
+│   └── workflows/qlint-self-scan.yml   # dogfooding workflow
 ├── backend/
-│   ├── main.py
-│   ├── database.py
-│   ├── auth.py
+│   ├── main.py                  # FastAPI app + router wiring
+│   ├── database.py              # Motor client, indexes
+│   ├── auth.py                  # JWT, password hashing, current-user deps
 │   ├── models.py
 │   ├── routers/
 │   │   ├── admin_router.py
 │   │   ├── auth_router.py
+│   │   ├── benchmark_router.py  # PQC benchmark lab
+│   │   ├── hndl_router.py       # Harvest Now, Decrypt Later risk
 │   │   ├── oauth_router.py
 │   │   ├── scan_router.py
 │   │   └── user_router.py
-│   ├── github_client.py
-│   ├── vulnerability_db.py
-│   ├── ast_scanner.py
-│   ├── js_scanner.py
-│   ├── scanner_engine.py
+│   ├── github_client.py         # repo/file fetching, extension mapping
+│   ├── vulnerability_db.py      # CRYPTO_DB: severities, fixes, NIST standards
+│   ├── ast_scanner.py           # Python (AST)
+│   ├── js_scanner.py            # JavaScript / TypeScript
+│   ├── go_scanner.py            # Go
+│   ├── scanner_engine.py        # orchestration: GitHub repo or local directory
+│   ├── sarif_converter.py       # scan report -> SARIF 2.1.0
+│   ├── hndl_calculator.py
+│   ├── pqc_benchmark.py         # liboqs benchmarks (optional dependency)
+│   ├── qlint_cli.py             # standalone CI scanner, no server or database
 │   ├── requirements.txt
+│   ├── requirements-pqc.txt     # liboqs, only for the benchmark lab
 │   ├── pytest.ini
 │   ├── .env.example
-│   └── tests/
-│       ├── conftest.py
-│       ├── test_vulnerability_db.py
-│       ├── test_ast_scanner.py
-│       ├── test_js_scanner.py
-│       ├── test_github_client.py
-│       ├── test_scanner_engine.py
-│       ├── test_auth.py
-│       ├── test_routers.py
-│       ├── test_admin.py
-│       └── test_oauth.py
+│   └── tests/                   # one test module per source module
 ├── frontend/
 │   ├── src/
 │   │   ├── App.jsx
 │   │   ├── App.css
+│   │   ├── PqcBenchmark.jsx
+│   │   ├── api.js
 │   │   └── main.jsx
 │   ├── index.html
 │   └── package.json
@@ -170,6 +175,73 @@ pytest
 
 Expected: all tests pass.
 
+## Use QLint in CI
+
+`backend/qlint_cli.py` is a standalone scanner: it walks a directory that is
+already on disk and needs no server, database, credentials, or GitHub API
+calls. It runs the same scanners and emits the same SARIF 2.1.0 as the web app.
+
+```bash
+python backend/qlint_cli.py --path . --output qlint-results.sarif
+python backend/qlint_cli.py --path ./src --format json --fail-on warning
+python backend/qlint_cli.py --path . --exclude "benchmarks/*,vendor/legacy.py"
+```
+
+| Flag        | Default               | Description                                              |
+| ----------- | --------------------- | -------------------------------------------------------- |
+| `--path`    | `.`                   | Directory to scan                                        |
+| `--output`  | `qlint-results.sarif` | Where to write results                                   |
+| `--format`  | `sarif`               | `sarif` (2.1.0) or `json` (the raw report shape)          |
+| `--exclude` | none                  | Glob patterns to skip; repeatable or comma-separated      |
+| `--fail-on` | `critical`            | Exit 1 on findings at or above this level; `none` never fails |
+
+`--fail-on` is what blocks a pull request: `critical` fails on quantum-broken
+algorithms (RSA, ECC, Ed25519, MD5, SHA-1), `warning` also fails on weakened
+ones (AES-128, SHA-256), `none` reports without gating.
+
+`--exclude` matches repo-relative paths, on top of the built-in pruning of
+dot-directories and vendored trees (`node_modules`, `__pycache__`, `dist`, ...).
+A pattern that matches a directory excludes everything under it, and excluded
+files are never read — they do not count toward `files scanned`. Matching is
+case-sensitive on every platform, so a pattern behaves the same on a developer's
+machine and on a Linux runner. Use it for code that holds classical algorithms
+on purpose: test fixtures, compatibility shims, benchmark baselines.
+
+### GitHub Action
+
+QLint ships a composite Action at `.github/actions/qlint-scan`. To use it from
+another repository, point at a tagged release and upload the SARIF so findings
+land in that repo's Security tab:
+
+```yaml
+name: PQC Scan
+on: [push, pull_request]
+
+jobs:
+  qlint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Abhushan187/QLint/.github/actions/qlint-scan@v1
+        with:
+          fail-on: critical
+          exclude: tests/fixtures/*
+      - if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: qlint-results.sarif
+```
+
+`if: always()` matters: a scan that fails the build is exactly the one whose
+results you want uploaded. The Action installs `backend/requirements.txt` only
+— static scanning needs no liboqs, so there is no native build step.
+
+`.github/workflows/qlint-self-scan.yml` runs this against QLint itself on every
+push and pull request.
+
 ## API Endpoints
 
 | Method | Endpoint        | Description              | Example                                                    |
@@ -262,8 +334,8 @@ share one entry.
 | Python     | Available   | `.py`            | AST-based (zero false positives)   |
 | JavaScript | Available   | `.js`, `.jsx`    | Context-aware pattern matching     |
 | TypeScript | Available   | `.ts`, `.tsx`    | Context-aware pattern matching     |
+| Go         | Available   | `.go`            | Context-aware pattern matching     |
 | Java       | Coming Soon | —                | —                                  |
-| Go         | Coming Soon | —                | —                                  |
 | Rust       | Coming Soon | —                | —                                  |
 
 A scan report lists every language it touched under `languages_scanned`, and
@@ -287,13 +359,24 @@ attacks.
 
 ## Roadmap
 
-- ~~F9: Auth (JWT + MongoDB), user accounts, scan history, scan caching~~ (done)
-- ~~F11: Admin dashboard~~ (done)
-- ~~F12: GitHub OAuth~~ (done)
+Shipped:
+
+- ~~F9: Auth (JWT + MongoDB), user accounts, scan history, scan caching~~
+- ~~F11: Admin dashboard~~
+- ~~F12: GitHub OAuth~~
+- ~~F13: JavaScript / TypeScript scanning~~
+- ~~F16: Go scanning~~
+- ~~F17: HNDL (Harvest Now, Decrypt Later) risk calculator~~
+- ~~F18: PQC benchmark lab (liboqs)~~
+- ~~F19: SARIF 2.1.0 output~~
+- ~~F20: Standalone CLI + GitHub Action~~
+
+Planned:
+
 - F10: Team workspaces
-- F13: JS/TS scanning
 - F14: Stripe integration
 - F15: AI context-aware patches
+- Java and Rust scanners
 
 ## License
 

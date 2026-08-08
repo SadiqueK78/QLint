@@ -1,0 +1,78 @@
+name: 'QLint PQC Scan'
+description: 'Scan a repository for quantum-vulnerable cryptography'
+
+inputs:
+  fail-on:
+    description: 'Severity level that fails the build (critical, warning, or none)'
+    required: false
+    default: 'critical'
+  path:
+    description: 'Directory to scan (defaults to the checked-out repository)'
+    required: false
+    default: ''
+  output:
+    description: 'Where to write the SARIF file'
+    required: false
+    default: qlint-results.sarif
+  exclude:
+    description: >-
+      Comma-separated glob patterns of paths to skip, matched against
+      repo-relative paths (e.g. "benchmarks/*,vendor/legacy.py")
+    required: false
+    default: ''
+
+outputs:
+  sarif-file:
+    description: 'Path to the generated SARIF file'
+    value: ${{ steps.scan.outputs.sarif-file }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+
+    # requirements.txt, not requirements-pqc.txt: this Action only does static
+    # scanning, so it must not need liboqs built on the runner.
+    - name: Install QLint dependencies
+      shell: bash
+      run: |
+        python -m pip install --disable-pip-version-check --quiet \
+          -r "$GITHUB_ACTION_PATH/../../../backend/requirements.txt"
+
+    - name: Run QLint scan
+      id: scan
+      shell: bash
+      env:
+        SCAN_PATH: ${{ inputs.path }}
+        SARIF_FILE: ${{ inputs.output }}
+        FAIL_ON: ${{ inputs.fail-on }}
+        EXCLUDE: ${{ inputs.exclude }}
+      run: |
+        # Resolved here rather than in the input default: expression support in
+        # composite action input defaults is not guaranteed.
+        SCAN_PATH="${SCAN_PATH:-$GITHUB_WORKSPACE}"
+
+        # Only pass --exclude when there is something to exclude; an empty
+        # pattern would otherwise be forwarded as a literal argument.
+        exclude_args=()
+        if [ -n "$EXCLUDE" ]; then
+          exclude_args=(--exclude "$EXCLUDE")
+        fi
+
+        # The scan's exit code is the build verdict, but the output has to be
+        # published either way — a failing scan is exactly when the caller
+        # most wants to upload the SARIF.
+        set +e
+        python "$GITHUB_ACTION_PATH/../../../backend/qlint_cli.py" \
+          --path "$SCAN_PATH" \
+          --output "$SARIF_FILE" \
+          --format sarif \
+          --fail-on "$FAIL_ON" \
+          "${exclude_args[@]}"
+        scan_status=$?
+        set -e
+        echo "sarif-file=$SARIF_FILE" >> "$GITHUB_OUTPUT"
+        exit $scan_status
