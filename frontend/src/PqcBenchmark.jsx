@@ -257,6 +257,10 @@ export default function PqcBenchmark() {
     <div className="pqc-page">
       <div className="pqc-header">
         <h1 className="pqc-title">PQC Benchmark Lab</h1>
+        <p className="pqc-lede">
+          Press Run Benchmark to see how fast real quantum-safe cryptography
+          runs on this server, next to the algorithms in use today.
+        </p>
         <p className="pqc-intro">
           This page runs real post-quantum cryptography on the QLint server, on
           demand. Clicking the button below generates keys, encapsulates and

@@ -20,9 +20,18 @@
   --info: #2563eb;
   --info-bg: #eff6ff;
   --info-border: #bfdbfe;
-  --radius: 8px;
-  --shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
-  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.07), 0 2px 4px rgba(0, 0, 0, 0.05);
+  --radius: 5px;
+  --radius-sm: 3px;
+  --radius-lg: 6px;
+  /* Cards are separated by a 1px border, not by depth. Both shadow tokens
+     stay defined so the rules that reference them keep parsing; they simply
+     no longer lift anything off the page. */
+  --shadow: none;
+  --shadow-md: none;
+  /* One content width for the whole site, so the navbar, the scan card, the
+     results, and the footer all line up on the same left and right edges. */
+  --container: 1320px;
+  --gutter: 32px;
   --mono: "JetBrains Mono", "Fira Code", monospace;
   --navbar-bg: #0f172a;
   --navbar-text: rgba(255, 255, 255, 0.85);
@@ -74,10 +83,10 @@ input {
 
 .navbar-inner {
   position: relative;
-  max-width: 1280px;
+  max-width: var(--container);
   height: 60px;
   margin: 0 auto;
-  padding: 0 40px;
+  padding: 0 var(--gutter);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -305,15 +314,15 @@ input {
 
 .hero {
   width: 100%;
-  padding: 48px 0 64px;
+  padding: 40px 0 24px;
   background: var(--bg);
   text-align: center;
 }
 
 .hero-inner {
-  max-width: 800px;
+  max-width: var(--container);
   margin: 0 auto;
-  padding: 0 40px;
+  padding: 0 var(--gutter);
 }
 
 .hero-badge {
@@ -382,12 +391,12 @@ input {
   display: block;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-md);
-  padding: 32px;
-  width: calc(100% - 80px);
-  max-width: 860px;
-  margin: 40px auto 0;
+  padding: 24px;
+  width: calc(100% - var(--gutter) * 2);
+  max-width: var(--container);
+  margin: 24px auto 0;
 }
 
 .scan-label {
@@ -567,76 +576,112 @@ input {
   background: var(--surface);
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
-  padding: 28px 24px;
-  margin-top: 48px;
+  padding: 32px var(--gutter);
+  margin-top: 32px;
 }
 
 .langs-inner {
-  max-width: 860px;
+  max-width: var(--container);
   margin: 0 auto;
 }
 
-.langs-label {
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.8px;
-  text-transform: uppercase;
-  color: var(--text-muted);
+/* A section header that reads like a table caption rather than a headline:
+   the label on the left, the count on the right, a rule underneath. */
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 10px;
   margin-bottom: 16px;
-  text-align: center;
+  border-bottom: 1px solid var(--border);
 }
 
-.langs-row {
+.section-title {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.section-meta {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* auto-fill rather than a fixed column count: the row reflows on its own
+   between the wide container and a phone, with no breakpoint to maintain. */
+.lang-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+/* The 1px grid gap is the border; each cell paints over it. */
+.lang-card {
+  background: var(--surface);
+  padding: 14px 16px;
+}
+
+.lang-card-soon {
+  background: var(--bg);
+}
+
+.lang-card-top {
   display: flex;
-  justify-content: center;
-  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
   gap: 10px;
 }
 
-.lang-pill {
-  border-radius: 100px;
-  padding: 8px 20px;
+.lang-name {
   font-size: 14px;
-  font-weight: 500;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
-.lang-active {
-  border: 1px solid var(--safe-border);
-  background: var(--safe-bg);
-  color: var(--safe);
-}
-
-.lang-soon {
-  border: 1px solid var(--border);
-  background: var(--surface);
+.lang-ext {
+  font-family: var(--mono);
+  font-size: 11.5px;
   color: var(--text-muted);
+  margin-top: 6px;
+}
+
+.lang-detail {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  margin-top: 6px;
 }
 
 .lang-tag {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
-  letter-spacing: 0.5px;
-  color: #ffffff;
-  border-radius: 100px;
-  padding: 2px 10px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
 }
 
+/* Colour carries the status and nothing else. */
 .tag-active {
-  background: var(--safe);
+  color: var(--safe);
+  background: var(--safe-bg);
+  border-color: var(--safe-border);
 }
 
 .tag-soon {
-  background: var(--text-muted);
-}
-
-.langs-desc {
-  font-size: 13px;
   color: var(--text-muted);
-  margin: 16px 0 0;
-  text-align: center;
+  background: var(--bg);
+  border-color: var(--border);
 }
 
 /* ---------------------------------------------------------- scanning */
@@ -655,7 +700,7 @@ input {
   width: 100%;
   margin: auto;
   padding: 48px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border);
   box-shadow: var(--shadow-md);
   text-align: center;
@@ -775,7 +820,7 @@ input {
 .score-card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   padding: 24px 28px;
   box-shadow: var(--shadow);
   min-width: 180px;
@@ -815,7 +860,7 @@ input {
 }
 
 .sum-card {
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   padding: 20px 24px;
   box-shadow: var(--shadow);
   flex: 1;
@@ -965,7 +1010,7 @@ input {
 .file-header {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   padding: 14px 20px;
   display: flex;
   justify-content: space-between;
@@ -979,7 +1024,7 @@ input {
 }
 
 .file-header-open {
-  border-radius: 12px 12px 0 0;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
 }
 
 .file-name {
@@ -1027,7 +1072,7 @@ input {
   background: var(--surface);
   border: 1px solid var(--border);
   border-top: none;
-  border-radius: 0 0 12px 12px;
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
 }
 
 .finding {
@@ -1442,7 +1487,7 @@ input {
 .empty-state {
   background: var(--safe-bg);
   border: 1px solid var(--safe-border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   padding: 48px;
   text-align: center;
   max-width: 560px;
@@ -1466,12 +1511,12 @@ input {
 .cta-banner {
   width: 100%;
   background: var(--navy);
-  padding: 56px 24px;
+  padding: 40px var(--gutter);
   text-align: center;
 }
 
 .cta-inner {
-  max-width: 700px;
+  max-width: var(--container);
   margin: 0 auto;
 }
 
@@ -1516,37 +1561,81 @@ input {
 }
 
 .footer-inner {
-  max-width: 1280px;
+  max-width: var(--container);
   margin: 0 auto;
-  padding: 32px 40px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-  flex-wrap: wrap;
+  padding: 40px var(--gutter) 24px;
 }
 
-.footer-left {
-  display: flex;
-  gap: 24px;
-  align-items: center;
-  flex-wrap: wrap;
+/* Brand column is wider than the link columns and comes first; the three
+   link columns share what is left and collapse to two, then one. */
+.footer-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.6fr) repeat(3, minmax(140px, 1fr));
+  gap: 32px;
+  padding-bottom: 28px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-.footer-left a {
+.footer-wordmark {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  color: #ffffff;
+}
+
+.footer-tagline {
+  font-size: 13px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.5);
+  margin: 8px 0 0;
+  max-width: 34ch;
+}
+
+.footer-col-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.85);
+  margin-bottom: 12px;
+}
+
+.footer-col-links {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.footer-col-links a {
   font-size: 13px;
   color: rgba(255, 255, 255, 0.5);
   text-decoration: none;
   transition: color 0.15s;
+  width: fit-content;
 }
 
-.footer-left a:hover {
-  color: rgba(255, 255, 255, 0.9);
+.footer-col-links a:hover {
+  color: #ffffff;
+}
+
+.footer-bottom {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding-top: 20px;
 }
 
 .footer-copy {
   font-size: 13px;
-  color: rgba(255, 255, 255, 0.4);
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.footer-note {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.35);
+  max-width: 60ch;
 }
 
 /* ---------------------------------------------------------- responsive */
@@ -1694,16 +1783,12 @@ input {
   }
 
   .footer-inner {
-    flex-direction: column;
-    gap: 16px;
-    text-align: center;
-    padding: 32px 16px;
-    align-items: center;
+    padding: 32px 20px 20px;
   }
 
-  .footer-left {
-    justify-content: center;
-    flex-wrap: wrap;
+  .footer-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 24px;
   }
 }
 
@@ -1719,7 +1804,7 @@ input {
    toggle without needing its own [data-theme] block. */
 
 .pqc-page {
-  max-width: 1280px;
+  max-width: var(--container);
   margin: 0 auto;
   padding: 48px 40px 80px;
 }
@@ -1811,7 +1896,7 @@ input {
   overflow-x: auto;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
 }
 
 .pqc-table {
@@ -1941,7 +2026,7 @@ input {
 .pqc-chart {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   padding: 18px 20px 16px;
 }
 
@@ -2081,14 +2166,6 @@ input {
   border-color: var(--border);
 }
 
-[data-theme="dark"] .lang-soon {
-  background: var(--surface);
-}
-
-[data-theme="dark"] .lang-tag {
-  color: #0a0a0a;
-}
-
 [data-theme="dark"] .hero-badge {
   background: var(--surface);
   border-color: var(--border-strong);
@@ -2135,14 +2212,6 @@ input {
 [data-theme="dark"] .nav-btn:hover,
 [data-theme="dark"] .sidebar-item:hover {
   color: #ffffff;
-}
-
-[data-theme="dark"] .footer-left a {
-  color: rgba(255, 255, 255, 0.5);
-}
-
-[data-theme="dark"] .footer-left a:hover {
-  color: rgba(255, 255, 255, 0.9);
 }
 
 [data-theme="dark"] .pill-critical,
@@ -2243,28 +2312,18 @@ input {
   position: relative;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   padding: 36px;
   width: 400px;
   max-width: calc(100vw - 32px);
   box-shadow: var(--shadow-md);
 }
 
+/* Positioning only -- .icon-btn carries the look. */
 .auth-close {
   position: absolute;
   top: 12px;
-  right: 14px;
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  font-size: 20px;
-  line-height: 1;
-  cursor: pointer;
-  padding: 4px 8px;
-}
-
-.auth-close:hover {
-  color: var(--text-primary);
+  right: 12px;
 }
 
 .auth-title {
@@ -2432,20 +2491,6 @@ input {
   margin-top: 4px;
 }
 
-.history-close {
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  font-size: 22px;
-  line-height: 1;
-  cursor: pointer;
-  padding: 4px 8px;
-}
-
-.history-close:hover {
-  color: var(--text-primary);
-}
-
 .history-message {
   font-size: 14px;
   color: var(--text-muted);
@@ -2477,20 +2522,6 @@ input {
   font-size: 15px;
   font-weight: 600;
   color: var(--text-primary);
-}
-
-.history-delete {
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  cursor: pointer;
-  font-size: 16px;
-  line-height: 1;
-  padding: 0 4px;
-}
-
-.history-delete:hover {
-  color: var(--critical);
 }
 
 .history-stats {
@@ -2582,7 +2613,7 @@ input {
 }
 
 .admin-inner {
-  max-width: 1100px;
+  max-width: var(--container);
   margin: 0 auto;
 }
 
@@ -2604,20 +2635,6 @@ input {
   font-size: 14px;
   color: var(--text-muted);
   margin-top: 4px;
-}
-
-.admin-close {
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  font-size: 22px;
-  line-height: 1;
-  cursor: pointer;
-  padding: 4px 8px;
-}
-
-.admin-close:hover {
-  color: var(--text-primary);
 }
 
 .admin-message {
@@ -3110,7 +3127,7 @@ input {
   align-items: center;
   gap: 18px;
   padding: 18px 20px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   border: 1px solid;
 }
 
@@ -3262,9 +3279,15 @@ input {
    light/dark toggle without needing their own [data-theme] block. */
 
 .page {
-  max-width: 860px;
+  max-width: var(--container);
   margin: 0 auto;
-  padding: 48px 40px 80px;
+  padding: 40px var(--gutter) 64px;
+}
+
+/* Prose pages keep a readable measure inside the wide container rather than
+   running headline-to-headline across 1320px. */
+.page-doc {
+  max-width: 940px;
 }
 
 .page-header {
@@ -3297,7 +3320,7 @@ input {
 .team-card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow);
   padding: 20px 24px;
   display: flex;
@@ -3392,4 +3415,164 @@ input {
   .team-card {
     align-items: flex-start;
   }
+}
+
+/* ------------------------------------------------------- icon buttons */
+
+/* One affordance for every close/dismiss control. Previously each of these
+   was a bare "X" text node with no border and its own font-size, which is
+   why none of them read as buttons. */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.icon-btn:hover {
+  background: var(--bg);
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.icon-btn:focus-visible {
+  outline: 2px solid var(--info);
+  outline-offset: 1px;
+}
+
+.icon-btn-danger:hover {
+  background: var(--critical-bg);
+  border-color: var(--critical-border);
+  color: var(--critical);
+}
+
+/* --------------------------------------------------- auth notice banner */
+
+/* A failed sign-in used to surface as a two-second toast, which is
+   indistinguishable from nothing happening. This stays until dismissed. */
+.auth-notice {
+  max-width: var(--container);
+  margin: 16px auto 0;
+  padding: 12px 14px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  background: var(--critical-bg);
+  border: 1px solid var(--critical-border);
+  border-radius: var(--radius);
+  width: calc(100% - var(--gutter) * 2);
+}
+
+.auth-notice-text {
+  flex: 1;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--critical);
+}
+
+.auth-notice-close {
+  color: var(--critical);
+}
+
+.auth-notice-close:hover {
+  background: transparent;
+  border-color: var(--critical-border);
+  color: var(--critical);
+}
+
+/* ------------------------------------------------------------- FAQ */
+
+.faq-list {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.faq-item + .faq-item {
+  border-top: 1px solid var(--border);
+}
+
+.faq-item-open {
+  background: var(--surface);
+}
+
+.faq-question {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 15px 18px;
+  background: transparent;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.faq-question:hover {
+  background: var(--surface);
+}
+
+.faq-item-open .faq-question {
+  font-weight: 600;
+}
+
+.faq-chevron {
+  display: inline-flex;
+  color: var(--text-muted);
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+}
+
+.faq-chevron-open {
+  transform: rotate(180deg);
+  color: var(--text-secondary);
+}
+
+.faq-answer {
+  padding: 0 18px 18px;
+  max-width: 78ch;
+}
+
+.faq-text {
+  font-size: 14.5px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+  margin: 0 0 12px;
+}
+
+.faq-text:last-child {
+  margin-bottom: 0;
+}
+
+.faq-link {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--info);
+}
+
+/* ----------------------------------------------------- benchmark lede */
+
+.pqc-lede {
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  font-weight: 500;
+  margin: 0 0 10px;
+  padding-left: 12px;
+  border-left: 2px solid var(--border-strong);
 }

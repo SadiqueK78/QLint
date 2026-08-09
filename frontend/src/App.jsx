@@ -3,6 +3,9 @@ import "./App.css";
 import PqcBenchmark from "./PqcBenchmark";
 import About from "./About";
 import Help from "./Help";
+import Terms from "./Terms";
+import Privacy from "./Privacy";
+import { CopyButton, FixPanels } from "./FixPanels";
 import { API_BASE } from "./api";
 
 // The app is a single view-switcher, so "routing" here is just the paths that
@@ -12,15 +15,31 @@ const HOME_PATH = "/";
 const BENCHMARK_PATH = "/benchmark";
 const ABOUT_PATH = "/about";
 const HELP_PATH = "/help";
+const TERMS_PATH = "/terms";
+const PRIVACY_PATH = "/privacy";
 
 // Each standalone page renders instead of the scanner. Keeping them in one
-// table means the navbar, the sidebar, and the main switch all agree on what
-// counts as "not the scanner" without three copies of the same path list.
+// table means the navbar, the sidebar, the footer, and the main switch all
+// agree on what counts as "not the scanner" without four copies of the same
+// path list. `nav` marks the ones the top bar shows; the legal pages are
+// reachable from the footer only.
 const PAGES = [
-  { path: BENCHMARK_PATH, label: "PQC Benchmark Lab", render: () => <PqcBenchmark /> },
-  { path: ABOUT_PATH, label: "About", render: () => <About /> },
-  { path: HELP_PATH, label: "Help", render: () => <Help /> },
+  {
+    path: BENCHMARK_PATH,
+    label: "PQC Benchmark Lab",
+    nav: true,
+    render: () => <PqcBenchmark />,
+  },
+  { path: ABOUT_PATH, label: "About Us", nav: true, render: () => <About /> },
+  { path: HELP_PATH, label: "Help", nav: true, render: () => <Help /> },
+  { path: TERMS_PATH, label: "Terms of Service", render: () => <Terms /> },
+  { path: PRIVACY_PATH, label: "Privacy Policy", render: () => <Privacy /> },
 ];
+
+const NAV_PAGES = PAGES.filter((page) => page.nav);
+
+const README_URL = "https://github.com/Abhushan187/QLint#readme";
+const REPO_URL = "https://github.com/Abhushan187/QLint";
 const SEVERITY_RANK = { critical: 0, warning: 1, safe: 2, info: 3 };
 const FILTER_TABS = [
   { key: "all", label: "All Issues" },
@@ -32,6 +51,27 @@ const FILTER_TABS = [
 
 const TOKEN_KEY = "qlint_token";
 const GITHUB_LOGIN_URL = `${API_BASE}/auth/github/login`;
+
+// The callback redirects here with one of these codes when sign-in did not
+// complete. Each one has a different fix, so each gets its own sentence
+// instead of the single "GitHub connection failed" that used to cover them
+// all -- a database outage and a rejected code are not the same problem.
+const GITHUB_ERROR_MESSAGES = {
+  not_configured:
+    "GitHub sign-in is not configured on the server. Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET in backend/.env.",
+  no_code: "GitHub did not send an authorization code. Try signing in again.",
+  token_exchange_failed:
+    "GitHub rejected the sign-in request. The code may have expired, or the server's GitHub client secret may be wrong.",
+  profile_unavailable:
+    "GitHub signed you in but would not share your account details, so there was nothing to create an account from.",
+  db_unavailable:
+    "GitHub signed you in, but QLint could not reach its database to save the session. Start MongoDB and try again.",
+  server_error: "Something went wrong while completing GitHub sign-in.",
+};
+
+function githubErrorMessage(code) {
+  return GITHUB_ERROR_MESSAGES[code] || GITHUB_ERROR_MESSAGES.server_error;
+}
 
 const startGithubOAuth = () => {
   window.location.href = GITHUB_LOGIN_URL;
@@ -87,14 +127,14 @@ function expandedFromResult(data) {
   return expanded;
 }
 
-function Logo({ onNavigate }) {
+function Logo({ onGoHome }) {
   return (
     <a
       href={HOME_PATH}
       className="logo"
       onClick={(e) => {
         e.preventDefault();
-        onNavigate(HOME_PATH);
+        onGoHome();
       }}
     >
       <svg width="32" height="32" viewBox="0 0 32 32" aria-hidden="true">
@@ -213,6 +253,27 @@ function GitHubIcon({ stroke = "#FFFFFF", size = 16 }) {
   );
 }
 
+// One dismiss glyph for every close/delete affordance, so the scan-history
+// entries, the history panel, the auth modal, and the notice banner stop each
+// drawing their own bare "X" character at a different size.
+function CloseIcon({ size = 14 }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <path d="M18 6 L6 18" />
+      <path d="M6 6 L18 18" />
+    </svg>
+  );
+}
+
 function Toast({ message }) {
   return <div className="toast">{message}</div>;
 }
@@ -220,6 +281,7 @@ function Toast({ message }) {
 function Navbar({
   theme,
   onToggleTheme,
+  onGoHome,
   user,
   onLogin,
   onSignup,
@@ -246,11 +308,11 @@ function Navbar({
             <span className="hamburger-line" />
             <span className="hamburger-line" />
           </button>
-          <Logo onNavigate={onNavigate} />
+          <Logo onGoHome={onGoHome} />
         </div>
         <div className="nav-actions">
           <ThemeToggle theme={theme} onToggle={onToggleTheme} />
-          {PAGES.map((page) => (
+          {NAV_PAGES.map((page) => (
             <a
               key={page.path}
               className={`nav-btn${
@@ -267,7 +329,7 @@ function Navbar({
           ))}
           <a
             className="nav-btn"
-            href="https://github.com/Abhushan187/QLint"
+            href={REPO_URL}
             target="_blank"
             rel="noreferrer"
           >
@@ -341,7 +403,7 @@ function Navbar({
         />
       )}
       <nav className={`sidebar${sidebarOpen ? " sidebar-open" : ""}`}>
-        {PAGES.map((page) => (
+        {NAV_PAGES.map((page) => (
           <a
             key={page.path}
             className={`sidebar-item${
@@ -359,7 +421,7 @@ function Navbar({
         ))}
         <a
           className="sidebar-item"
-          href="https://github.com/Abhushan187/QLint"
+          href={REPO_URL}
           target="_blank"
           rel="noreferrer"
         >
@@ -593,31 +655,65 @@ function ScanInputCard({
   );
 }
 
+// What each scanner actually reads, rather than a row of language names with
+// nothing behind them. The detail is the point: it is what tells a reader
+// whether their codebase is covered before they spend a scan finding out.
+const LANGUAGES = [
+  {
+    name: "Python",
+    status: "active",
+    extensions: ".py",
+    detail: "Full AST walk: imports, calls, and attribute access",
+  },
+  {
+    name: "JavaScript",
+    status: "active",
+    extensions: ".js .jsx .mjs .cjs",
+    detail: "node:crypto, WebCrypto, and common library calls",
+  },
+  {
+    name: "TypeScript",
+    status: "active",
+    extensions: ".ts .tsx",
+    detail: "Same detection as JavaScript, type syntax tolerated",
+  },
+  {
+    name: "Go",
+    status: "active",
+    extensions: ".go",
+    detail: "crypto/* imports, tls.Config, and key generation",
+  },
+  { name: "Java", status: "soon", extensions: ".java", detail: "In development" },
+  { name: "Rust", status: "soon", extensions: ".rs", detail: "In development" },
+];
+
 function LanguagesStrip() {
-  const active = ["Python", "JavaScript", "TypeScript", "Go"];
-  const comingSoon = ["Java", "Rust"];
   return (
     <section className="langs">
       <div className="langs-inner">
-        <div className="langs-label">Supported Languages</div>
-        <div className="langs-row">
-          {active.map((name) => (
-            <span className="lang-pill lang-active" key={name}>
-              {name}
-              <span className="lang-tag tag-active">Active</span>
-            </span>
-          ))}
-          {comingSoon.map((name) => (
-            <span className="lang-pill lang-soon" key={name}>
-              {name}
-              <span className="lang-tag tag-soon">Coming Soon</span>
-            </span>
+        <div className="section-head">
+          <h2 className="section-title">Supported languages</h2>
+          <span className="section-meta">4 active / 2 planned</span>
+        </div>
+        <div className="lang-grid">
+          {LANGUAGES.map((lang) => (
+            <div
+              className={`lang-card${
+                lang.status === "soon" ? " lang-card-soon" : ""
+              }`}
+              key={lang.name}
+            >
+              <div className="lang-card-top">
+                <span className="lang-name">{lang.name}</span>
+                <span className={`lang-tag tag-${lang.status}`}>
+                  {lang.status === "active" ? "Active" : "Planned"}
+                </span>
+              </div>
+              <div className="lang-ext">{lang.extensions}</div>
+              <div className="lang-detail">{lang.detail}</div>
+            </div>
           ))}
         </div>
-        <p className="langs-desc">
-          More languages are in active development. Python, JavaScript,
-          TypeScript, and Go scanning are available now.
-        </p>
       </div>
     </section>
   );
@@ -713,32 +809,6 @@ async function downloadSarif(result, authToken) {
   saveBlob(await response.blob(), reportFilename(result, "sarif"));
 }
 
-function splitFixSnippet(snippet) {
-  const lines = snippet.split("\n");
-  const splitIndex = lines.findIndex((line) => {
-    const trimmed = line.trim();
-    return trimmed.startsWith("# After:") || trimmed.startsWith("# After ");
-  });
-  if (splitIndex === -1) return null;
-  return {
-    before: lines.slice(0, splitIndex).join("\n").trim(),
-    after: lines.slice(splitIndex).join("\n").trim(),
-  };
-}
-
-function copyText(text) {
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    return navigator.clipboard.writeText(text);
-  }
-  const textarea = document.createElement("textarea");
-  textarea.value = text;
-  document.body.appendChild(textarea);
-  textarea.select();
-  document.execCommand("copy");
-  document.body.removeChild(textarea);
-  return Promise.resolve();
-}
-
 // Only the fields the backend actually reads get sent. That includes the
 // flagged line (code_snippet) and the suggested fix (fix_snippet): without
 // them the model can only describe the algorithm in the abstract, which is
@@ -765,66 +835,6 @@ function findingRequestBody(finding) {
     code_snippet: finding.code_snippet,
     fix_snippet: finding.fix_snippet,
   };
-}
-
-function CopyButton({ text, variant }) {
-  const [copied, setCopied] = useState(false);
-  const handleCopy = () => {
-    copyText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  };
-  return (
-    <button
-      className={`copy-btn copy-${variant}`}
-      type="button"
-      onClick={handleCopy}
-    >
-      {copied ? "Copied!" : "Copy"}
-    </button>
-  );
-}
-
-function FixPanels({ snippet }) {
-  const parts = splitFixSnippet(snippet);
-  if (!parts) {
-    return (
-      <div className="fix-panels">
-        <div className="fix-panel fix-panel-neutral">
-          <div className="fix-panel-header fix-header-neutral">
-            <span className="fix-panel-title fix-title-neutral">
-              Migration Pattern
-            </span>
-            <CopyButton text={snippet} variant="neutral" />
-          </div>
-          <pre className="fix-panel-body fix-body-neutral">{snippet}</pre>
-        </div>
-      </div>
-    );
-  }
-  return (
-    <div className="fix-panels">
-      <div className="fix-panel fix-panel-before">
-        <div className="fix-panel-header fix-header-before">
-          <span className="fix-panel-title fix-title-before">
-            Before (Vulnerable)
-          </span>
-          <CopyButton text={parts.before} variant="before" />
-        </div>
-        <pre className="fix-panel-body fix-body-before">{parts.before}</pre>
-      </div>
-      <div className="fix-panel fix-panel-after">
-        <div className="fix-panel-header fix-header-after">
-          <span className="fix-panel-title fix-title-after">
-            After (Quantum-Safe)
-          </span>
-          <CopyButton text={parts.after} variant="after" />
-        </div>
-        <pre className="fix-panel-body fix-body-after">{parts.after}</pre>
-      </div>
-    </div>
-  );
 }
 
 function ExplainBody({ loading, error, explanation, onRetry }) {
@@ -1556,12 +1566,12 @@ function AuthModal({ mode, loading, error, onSubmit, onClose, onSwitch }) {
     >
       <div className="auth-modal">
         <button
-          className="auth-close"
+          className="icon-btn auth-close"
           type="button"
           onClick={onClose}
           aria-label="Close"
         >
-          X
+          <CloseIcon size={16} />
         </button>
         <div className="auth-title">
           {isSignup ? "Create account" : "Welcome back"}
@@ -1656,12 +1666,12 @@ function HistoryPanel({ user, scans, loading, error, onClose, onOpen, onDelete }
             </div>
           </div>
           <button
-            className="history-close"
+            className="icon-btn"
             type="button"
             onClick={onClose}
             aria-label="Close scan history"
           >
-            X
+            <CloseIcon size={16} />
           </button>
         </div>
 
@@ -1686,7 +1696,7 @@ function HistoryPanel({ user, scans, loading, error, onClose, onOpen, onDelete }
                   {repoNameFromUrl(scan.repo_url)}
                 </span>
                 <button
-                  className="history-delete"
+                  className="icon-btn icon-btn-danger"
                   type="button"
                   aria-label="Delete scan"
                   onClick={(e) => {
@@ -1694,7 +1704,7 @@ function HistoryPanel({ user, scans, loading, error, onClose, onOpen, onDelete }
                     onDelete(scan.id);
                   }}
                 >
-                  X
+                  <CloseIcon />
                 </button>
               </div>
               <div className="history-stats">
@@ -1796,12 +1806,12 @@ function AdminPanel({
             <div className="admin-sub">QLint usage overview</div>
           </div>
           <button
-            className="admin-close"
+            className="icon-btn"
             type="button"
             onClick={onClose}
             aria-label="Close admin dashboard"
           >
-            X
+            <CloseIcon size={16} />
           </button>
         </div>
 
@@ -1967,16 +1977,78 @@ function FooterCTA() {
   );
 }
 
-function Footer() {
+function FooterColumn({ title, children }) {
+  return (
+    <div className="footer-col">
+      <div className="footer-col-title">{title}</div>
+      <div className="footer-col-links">{children}</div>
+    </div>
+  );
+}
+
+function Footer({ onNavigate }) {
+  // Internal links keep their href so they stay middle-clickable and
+  // copyable, and hand off to the router on a plain click.
+  const internal = (path, label) => (
+    <a
+      href={path}
+      key={path}
+      onClick={(e) => {
+        e.preventDefault();
+        onNavigate(path);
+      }}
+    >
+      {label}
+    </a>
+  );
+
   return (
     <footer className="footer">
       <div className="footer-inner">
-        <div className="footer-left">
-          <a href="#">Terms of Service</a>
-          <a href="#">Privacy Policy</a>
-          <a href="mailto:abhushan4625@gmail.com">Support</a>
+        <div className="footer-grid">
+          <div className="footer-brand">
+            <div className="footer-wordmark">QLint</div>
+            <p className="footer-tagline">
+              Post-quantum cryptography scanning for source repositories.
+            </p>
+          </div>
+
+          <FooterColumn title="Product">
+            {internal(BENCHMARK_PATH, "PQC Benchmark Lab")}
+            {internal(HELP_PATH, "Help")}
+            {internal(ABOUT_PATH, "About Us")}
+          </FooterColumn>
+
+          <FooterColumn title="Resources">
+            <a href={REPO_URL} target="_blank" rel="noopener noreferrer">
+              GitHub
+            </a>
+            <a href={README_URL} target="_blank" rel="noopener noreferrer">
+              Documentation
+            </a>
+            <a
+              href={`${REPO_URL}/issues`}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Report an issue
+            </a>
+          </FooterColumn>
+
+          <FooterColumn title="Legal">
+            {internal(TERMS_PATH, "Terms of Service")}
+            {internal(PRIVACY_PATH, "Privacy Policy")}
+            <a href="mailto:abhushan4625@gmail.com">Contact</a>
+          </FooterColumn>
         </div>
-        <div className="footer-copy">QLint &copy; 2026</div>
+
+        <div className="footer-bottom">
+          <span className="footer-copy">QLint &copy; 2026</span>
+          <span className="footer-note">
+            Scans NIST FIPS 203/204 migration targets. Not a substitute for a
+            professional security review.
+          </span>
+        </div>
       </div>
     </footer>
   );
@@ -2009,6 +2081,7 @@ export default function App() {
   const [historyError, setHistoryError] = useState(null);
 
   const [toast, setToast] = useState(null);
+  const [authNotice, setAuthNotice] = useState(null);
 
   const [showAdmin, setShowAdmin] = useState(false);
   const [adminStats, setAdminStats] = useState(null);
@@ -2083,7 +2156,10 @@ export default function App() {
     window.history.replaceState({}, "", window.location.pathname);
 
     if (oauthError) {
-      showToast("GitHub connection failed");
+      // A banner rather than a toast: the toast cleared itself after two
+      // seconds, which is how a failed sign-in came to look like nothing
+      // happening at all.
+      setAuthNotice(githubErrorMessage(oauthError));
       return;
     }
 
@@ -2098,11 +2174,13 @@ export default function App() {
       .then((data) => {
         setUser(data);
         setAuthToken(oauthToken);
-        showToast("GitHub connected successfully");
+        showToast("Signed in with GitHub");
       })
       .catch(() => {
         localStorage.removeItem(TOKEN_KEY);
-        showToast("GitHub connection failed");
+        setAuthNotice(
+          "GitHub signed you in, but QLint could not confirm the session. Is the backend running?"
+        );
       });
   }, []);
 
@@ -2434,6 +2512,11 @@ export default function App() {
     fetchRateLimit();
   };
 
+  const goHome = () => {
+    handleReset();
+    navigate(HOME_PATH);
+  };
+
   return (
     <div className="app-wrapper">
       <Navbar
@@ -2451,8 +2534,22 @@ export default function App() {
         onDisconnectGithub={disconnectGithub}
         route={route}
         onNavigate={navigate}
+        onGoHome={goHome}
       />
       {toast && <Toast message={toast} />}
+      {authNotice && (
+        <div className="auth-notice" role="alert">
+          <span className="auth-notice-text">{authNotice}</span>
+          <button
+            className="icon-btn auth-notice-close"
+            type="button"
+            aria-label="Dismiss"
+            onClick={() => setAuthNotice(null)}
+          >
+            <CloseIcon />
+          </button>
+        </div>
+      )}
       <div className="main-content">
         <main className="main">
           {activePage && activePage.render()}
@@ -2498,7 +2595,7 @@ export default function App() {
           )}
         </main>
       </div>
-      <Footer />
+      <Footer onNavigate={navigate} />
       {authView !== "none" && (
         <AuthModal
           mode={authView}

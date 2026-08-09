@@ -4,6 +4,7 @@ The connected account's OAuth token is stored on the user document and used
 for that user's scans, so they never have to paste a personal access token.
 """
 
+import logging
 import os
 import secrets
 from datetime import datetime, timezone
@@ -13,11 +14,18 @@ import httpx
 from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import RedirectResponse
+from pymongo.errors import PyMongoError
 
 from auth import create_access_token, get_current_user, user_from_token
 from database import get_users
 
 load_dotenv()
+
+# Every failure below ends as a 303 to the frontend, which is what a browser
+# needs but what makes the access log useless for debugging: the success and
+# failure redirects are the same status to the same host. So each failure is
+# logged here with its actual cause, and carries a distinct code to the UI.
+logger = logging.getLogger(__name__)
 
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID")
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET")
@@ -71,13 +79,27 @@ async def _exchange_code(client: httpx.AsyncClient, code: str) -> str | None:
             },
             headers={"Accept": "application/json"},
         )
-    except httpx.HTTPError:
+    except httpx.HTTPError as exc:
+        logger.error("OAuth token exchange could not reach GitHub: %s", exc)
         return None
     if response.status_code != 200:
+        logger.error(
+            "OAuth token exchange returned HTTP %s from GitHub", response.status_code
+        )
         return None
     payload = response.json()
     # GitHub answers 200 with an {"error": ...} body for a bad or expired code.
-    return payload.get("access_token")
+    if not payload.get("access_token"):
+        logger.error(
+            "OAuth token exchange was refused by GitHub: %s (%s). Check that "
+            "GITHUB_CLIENT_SECRET matches GITHUB_CLIENT_ID and that the app's "
+            "callback URL is %s",
+            payload.get("error"),
+            payload.get("error_description"),
+            GITHUB_OAUTH_REDIRECT_URI,
+        )
+        return None
+    return payload["access_token"]
 
 
 async def _fetch_profile(client: httpx.AsyncClient, token: str) -> dict | None:
@@ -120,18 +142,30 @@ async def github_callback(
     authorization: str | None = Header(default=None),
 ):
     """Complete the OAuth handshake and hand a JWT back to the frontend."""
-    if not code or not GITHUB_CLIENT_ID or not GITHUB_CLIENT_SECRET:
-        return _frontend_redirect(github_error="auth_failed")
+    if not GITHUB_CLIENT_ID or not GITHUB_CLIENT_SECRET:
+        logger.error(
+            "GitHub sign-in is not configured: set GITHUB_CLIENT_ID and "
+            "GITHUB_CLIENT_SECRET in backend/.env"
+        )
+        return _frontend_redirect(github_error="not_configured")
+    if not code:
+        logger.warning("GitHub callback was hit without a code parameter")
+        return _frontend_redirect(github_error="no_code")
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         access_token = await _exchange_code(client, code)
         if not access_token:
-            return _frontend_redirect(github_error="auth_failed")
+            return _frontend_redirect(github_error="token_exchange_failed")
 
         profile = await _fetch_profile(client, access_token)
 
     if not profile or not profile.get("email"):
-        return _frontend_redirect(github_error="auth_failed")
+        logger.error(
+            "GitHub accepted the code but the profile could not be read; "
+            "the token may lack the %s scope",
+            OAUTH_SCOPE,
+        )
+        return _frontend_redirect(github_error="profile_unavailable")
 
     email = profile["email"].strip().lower()
     github_fields = {
@@ -168,10 +202,23 @@ async def github_callback(
                     }
                 )
             token_email = email
+    except PyMongoError as exc:
+        # The handshake with GitHub succeeded; only the account write failed.
+        # Reported separately because the fix is "start MongoDB", not "try
+        # signing in again", and the two are indistinguishable from the log.
+        logger.error(
+            "GitHub sign-in for %s failed at the database step: %s. Is MongoDB "
+            "running at the configured MONGODB_URI?",
+            email,
+            exc,
+        )
+        return _frontend_redirect(github_error="db_unavailable")
     except Exception:
-        return _frontend_redirect(github_error="auth_failed")
+        logger.exception("Unexpected failure while completing GitHub sign-in")
+        return _frontend_redirect(github_error="server_error")
 
     jwt_token = create_access_token({"sub": token_email})
+    logger.info("GitHub sign-in completed for %s", token_email)
     return _frontend_redirect(github_token=jwt_token, github_user=token_email)
 
 
