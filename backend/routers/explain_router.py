@@ -3,26 +3,32 @@
 One endpoint, /scan/explain: the frontend sends the finding object it already
 has (from a completed /scan), and gets back a short natural-language write-up
 from an OpenRouter-hosted model. Results are cached in Mongo by a hash of the
-finding's *content* (algorithm, severity, attack vector, ...) rather than by
-file/line, so the tenth "RSA in auth.py" finding across a repo -- or across
-different repos -- is served from cache instead of paying for another
-completion.
+finding's *content* -- the algorithm and severity, and the flagged code itself
+-- rather than by file/line, so two identical lines of RSA share one cached
+explanation and one OpenRouter call, while two different lines never do.
+
+Each completion costs money, so the route is rate limited per client address.
 """
 
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from pymongo.errors import PyMongoError
 
 from ai_explainer import AIExplainerError, explain_finding
 from database import get_explanations
+from rate_limit import RateLimiter, rate_limit
 
 router = APIRouter()
 
 EXPLANATION_CACHE_TTL_DAYS = 30
+
+# Generous enough to explain every finding on a large report by hand, tight
+# enough that a script cannot run up an OpenRouter bill.
+_limiter = RateLimiter(max_requests=30, window_seconds=600)
 
 
 class FindingExplainRequest(BaseModel):
@@ -38,12 +44,23 @@ class FindingExplainRequest(BaseModel):
     classical_vulnerable: bool | None = None
     file: str | None = None
     line: int | None = None
+    # The BEFORE/AFTER pair the explanation is grounded in. code_snippet is the
+    # flagged source line the scanner captured; fix_snippet is the replacement
+    # it recommends. Both are produced by every scanner, and both used to be
+    # dropped here -- the model never saw a line of the user's actual code.
+    code_snippet: str | None = None
+    fix_snippet: str | None = None
 
 
 def _cache_key(finding: FindingExplainRequest) -> str:
-    """Deliberately excludes file/line: the explanation only depends on what
-    was found, not where, so every finding with the same shape shares one
-    cache entry and one OpenRouter call."""
+    """Hash everything the prompt is built from, the code included.
+
+    file/line stay out on purpose: two identical lines of RSA deserve the same
+    explanation wherever they live. But everything the model actually reads is
+    in the hash -- above all code_snippet -- because an explanation keyed on
+    the algorithm alone would be served back for a different file's code and
+    would confidently name functions that file does not contain.
+    """
     payload = {
         "algorithm": finding.algorithm,
         "severity": finding.severity,
@@ -51,6 +68,8 @@ def _cache_key(finding: FindingExplainRequest) -> str:
         "identifier": finding.identifier,
         "match_type": finding.match_type,
         "language": finding.language,
+        "code_snippet": finding.code_snippet,
+        "fix_snippet": finding.fix_snippet,
     }
     raw = json.dumps(payload, sort_keys=True)
     return hashlib.sha256(raw.encode()).hexdigest()
@@ -85,12 +104,14 @@ async def _cache_store(key: str, explanation: str, model: str) -> None:
         pass  # a failed cache write must not fail the request
 
 
-@router.post("/scan/explain")
+@router.post("/scan/explain", dependencies=[Depends(rate_limit(_limiter))])
 async def explain(body: FindingExplainRequest, request: Request):
     key = _cache_key(body)
 
+    # A doc missing its explanation is treated as a miss rather than served as
+    # an empty answer, so a partial write cannot poison the cache for 30 days.
     cached = await _cache_lookup(key)
-    if cached:
+    if cached and cached.get("explanation"):
         return {
             "explanation": cached["explanation"],
             "model": cached.get("model"),

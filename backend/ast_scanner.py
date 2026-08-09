@@ -7,6 +7,7 @@ from vulnerability_db.CRYPTO_DB.
 
 import ast
 
+from scanner_common import attach_snippets, normalize_attack_vector
 from vulnerability_db import find_algorithm
 
 # Names that identify a crypto algorithm only in context (too short or too
@@ -53,8 +54,11 @@ def _make_finding(
         "severity": entry["severity"],
         "quantum_vulnerable": entry["quantum_vulnerable"],
         "classical_vulnerable": entry["classical_vulnerable"],
-        "attack_vector": entry["attack_vector"],
+        "attack_vector": normalize_attack_vector(entry["attack_vector"]),
         "replacement": entry["replacement"],
+        # BEFORE: the flagged source line, filled in by attach_snippets once
+        # the whole file has been walked. AFTER: the recommended replacement.
+        "code_snippet": "",
         "fix_snippet": entry["fix_snippet"],
         "replacement_reason": entry["replacement_reason"],
     }
@@ -71,8 +75,9 @@ def _hashlib_import_finding(node: ast.AST) -> dict:
         "severity": "info",
         "quantum_vulnerable": False,
         "classical_vulnerable": False,
-        "attack_vector": "None",
+        "attack_vector": None,
         "replacement": None,
+        "code_snippet": "",
         "fix_snippet": "# Inspect hashlib usage: md5/sha1 are broken, sha256 is Grover-weakened.",
         "replacement_reason": "The hashlib module itself is not vulnerable; the specific hash calls made through it determine the risk.",
     }
@@ -184,6 +189,7 @@ def scan_python_source(source_code: str, filename: str = "") -> list[dict]:
 
     visitor = CryptoASTVisitor()
     visitor.visit(tree)
+    attach_snippets(visitor.findings, source_code)
 
     # Dedup on (line, algorithm) — import beats call beats string_arg
     priority = {"import": 0, "function_call": 1, "string_arg": 2}

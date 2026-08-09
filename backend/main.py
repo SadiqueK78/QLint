@@ -9,8 +9,8 @@ from fastapi.middleware.cors import CORSMiddleware
 import database
 from routers.admin_router import router as admin_router
 from routers.auth_router import router as auth_router
-from routers.explain_router import router as explain_router
 from routers.benchmark_router import router as benchmark_router
+from routers.explain_router import router as explain_router
 from routers.hndl_router import router as hndl_router
 from routers.oauth_router import router as oauth_router
 from routers.scan_router import router as scan_router

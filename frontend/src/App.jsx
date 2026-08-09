@@ -817,8 +817,10 @@ function copyText(text) {
   return Promise.resolve();
 }
 
-// Only the fields ai_explainer.py actually reads get sent — the raw
-// snippet/col stay local to this browser tab.
+// Only the fields ai_explainer.py actually reads get sent. That includes the
+// flagged line (code_snippet) and the suggested fix (fix_snippet): without
+// them the model can only describe the algorithm in the abstract, which is
+// the one thing its prompt tells it not to do.
 function explainRequestBody(finding) {
   return {
     algorithm: finding.algorithm,
@@ -833,6 +835,8 @@ function explainRequestBody(finding) {
     classical_vulnerable: finding.classical_vulnerable,
     file: finding.file,
     line: finding.line,
+    code_snippet: finding.code_snippet,
+    fix_snippet: finding.fix_snippet,
   };
 }
 
@@ -971,9 +975,11 @@ function FindingRow({ finding, fixKey, fixExpanded, onToggleFix }) {
           Line {finding.line}:{finding.col}
         </span>
       </div>
-      <p className="finding-vector">
-        Attack vector: {finding.attack_vector}
-      </p>
+      {finding.attack_vector != null && (
+        <p className="finding-vector">
+          Attack vector: {finding.attack_vector}
+        </p>
+      )}
       {finding.replacement != null && (
         <p className="finding-replacement">
           <span className="finding-replacement-label">Replace with:</span>{" "}

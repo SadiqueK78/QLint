@@ -11,6 +11,8 @@ import os
 import httpx
 from dotenv import load_dotenv
 
+from scanner_common import normalize_attack_vector
+
 load_dotenv()
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
@@ -65,8 +67,12 @@ def _build_prompt(finding: dict) -> str:
     lines = [f"Algorithm: {finding.get('algorithm')}"]
     if finding.get("severity"):
         lines.append(f"Severity: {finding['severity']}")
-    if finding.get("attack_vector"):
-        lines.append(f"Attack vector: {finding['attack_vector']}")
+    # Scanners now send real None for safe/info findings, but a client can
+    # still post the literal string "None"; either way it must not reach the
+    # model as though it were an attack vector.
+    attack_vector = normalize_attack_vector(finding.get("attack_vector"))
+    if attack_vector:
+        lines.append(f"Attack vector: {attack_vector}")
     if finding.get("quantum_vulnerable") is not None:
         lines.append(f"Quantum-vulnerable: {finding['quantum_vulnerable']}")
     if finding.get("classical_vulnerable") is not None:
@@ -87,13 +93,12 @@ def _build_prompt(finding: dict) -> str:
             location += f":{finding['line']}"
         lines.append(f"Location: {location}")
 
-    # These are the two fields that actually let the model ground its
-    # answer in the real diff instead of talking about the algorithm in
-    # the abstract. Adjust the .get() keys here to match whatever your
-    # scanner/fix-generator actually names them (e.g. "before_code" /
-    # "after_code", "vulnerable_snippet" / "fixed_snippet", etc.).
-    before_code = finding.get("before_code") or finding.get("code_before")
-    after_code = finding.get("after_code") or finding.get("code_after")
+    # The two fields that actually let the model ground its answer in the real
+    # code instead of talking about the algorithm in the abstract. These are
+    # the names the scanners produce: code_snippet is the flagged source line
+    # captured at scan time, fix_snippet the replacement CRYPTO_DB recommends.
+    before_code = finding.get("code_snippet")
+    after_code = finding.get("fix_snippet")
     if before_code:
         lines.append(f"\nBEFORE code (vulnerable):\n{before_code}")
     if after_code:
@@ -158,11 +163,25 @@ async def explain_finding(
 
     try:
         data = response.json()
-        content = data["choices"][0]["message"]["content"].strip()
+        choice = data["choices"][0]
+        content = choice["message"]["content"]
     except (KeyError, IndexError, ValueError, TypeError) as exc:
         raise AIExplainerError("OpenRouter response was missing content.") from exc
 
-    if not content:
+    # content comes back null on a content-filter stop and on a response that
+    # carried only tool calls. Calling .strip() on it raises AttributeError,
+    # which is not in the tuple above and so escaped this function entirely --
+    # the caller's 502 mapping never saw it and the request 500'd.
+    if not isinstance(content, str) or not content.strip():
         raise AIExplainerError("OpenRouter returned an empty explanation.")
+    content = content.strip()
+
+    # A completion stopped by the token cap ends mid-sentence. Failing here is
+    # what keeps a truncated explanation out of the 30-day cache.
+    if choice.get("finish_reason") == "length":
+        raise AIExplainerError(
+            f"OpenRouter truncated the explanation at the {MAX_TOKENS}-token "
+            "limit, so it was not cached. Retry, or raise MAX_TOKENS."
+        )
 
     return content, data.get("model", OPENROUTER_MODEL)

@@ -69,6 +69,9 @@ async def create_indexes() -> None:
         (db.scans, [("repo_url", ASCENDING), ("created_at", DESCENDING)], {}),
         # AI explanation cache: one entry per finding signature.
         (db.explanations, [("key", ASCENDING)], {"unique": True}),
+        # ...and let Mongo drop each entry once its expires_at passes, rather
+        # than filtering expired docs out of every read forever.
+        (db.explanations, [("expires_at", ASCENDING)], {"expireAfterSeconds": 0}),
     ]
     for collection, keys, options in specs:
         try:

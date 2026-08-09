@@ -285,9 +285,16 @@ ignored):
   "quantum_vulnerable": true,
   "classical_vulnerable": false,
   "file": "src/crypto.py",
-  "line": 12
+  "line": 12,
+  "code_snippet": "private_key = rsa.generate_private_key(key_size=2048)",
+  "fix_snippet": "import oqs\nkem = oqs.KeyEncapsulation('ML-KEM-768')"
 }
 ```
+
+`code_snippet` (the flagged line, captured by the scanner) and `fix_snippet`
+(the recommended replacement) are what make the answer specific to your code
+rather than a description of RSA in general. Every scanner emits both; send
+them.
 
 which returns:
 
@@ -296,12 +303,18 @@ which returns:
 ```
 
 Explanations are cached in MongoDB for 30 days, keyed by the *content* of the
-finding (algorithm, severity, attack vector, identifier, match type,
-language) rather than by file or repo — so the tenth `RSA` finding across a
-codebase, or across different scans entirely, is served from cache instead of
-triggering another OpenRouter call. If MongoDB is unreachable, caching is
-skipped and every call goes straight to OpenRouter; the feature still works,
-it's just not free.
+finding — algorithm, severity, attack vector, identifier, match type,
+language, and the two code snippets — rather than by file or repo. Two
+identical lines of `RSA` anywhere in a codebase share one cached explanation
+and one OpenRouter call; two different lines never do, because an explanation
+that names one file's variables must not be served for another's. If MongoDB
+is unreachable, caching is skipped and every call goes straight to OpenRouter;
+the feature still works, it's just not free.
+
+Because each cache miss costs a completion, the endpoint is rate limited to 30
+requests per 10 minutes per client address, and answers `429` beyond that. The
+window is per backend process: it resets on restart and is not shared between
+workers.
 
 Requires `OPENROUTER_API_KEY` (see Environment Variables below). Without it,
 `/scan/explain` returns `502` with a message telling you to set it — the rest
