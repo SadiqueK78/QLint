@@ -165,6 +165,10 @@ GITHUB_TOKEN=your_token_here
 | `GITHUB_CLIENT_SECRET` | —                           | GitHub OAuth app client secret             |
 | `GITHUB_OAUTH_REDIRECT_URI` | `http://localhost:8000/auth/github/callback` | Must match the OAuth app callback |
 | `FRONTEND_URL`         | `http://localhost:5174`     | Where the OAuth callback sends the browser |
+| `OPENROUTER_API_KEY`   | —                           | Enables `/scan/explain` (AI explanations). Get one at [openrouter.ai/keys](https://openrouter.ai/keys) |
+| `OPENROUTER_MODEL`     | `openai/gpt-4o-mini`        | Any model slug OpenRouter hosts (GPT, Claude, Llama, ...) |
+| `OPENROUTER_SITE_URL`  | `http://localhost:5174`     | Sent as `HTTP-Referer` per OpenRouter's app-identification convention |
+| `OPENROUTER_SITE_NAME` | `QLint`                     | Sent as `X-Title` per OpenRouter's app-identification convention |
 
 ## Running Tests
 
@@ -250,10 +254,71 @@ push and pull request.
 | GET    | `/scan/status`  | GitHub rate limit        | Returns remaining requests + reset time                    |
 | POST   | `/scan/preview` | List scannable source files | Body: `{"repo_url": "https://github.com/owner/repo"}`   |
 | POST   | `/scan`         | Full vulnerability scan  | Body: `{"repo_url": "https://github.com/owner/repo", "force_refresh": false}` |
+| POST   | `/scan/explain` | Explain one finding in plain English (AI) | Body: a finding object from a scan report |
 
 Authentication is **optional** on `/scan`. Anonymous scans work as before; send
 `Authorization: Bearer <token>` to attribute the scan to an account and have it
 appear in that user's history.
+
+### AI Explanations
+
+`POST /scan/explain` turns one finding from a scan report into a short,
+plain-English write-up: what the flagged algorithm does, why it's
+quantum-vulnerable (or weakened), what actually happens if it's broken, and
+how urgent migrating it is. It's powered by [OpenRouter](https://openrouter.ai),
+so any model OpenRouter hosts — GPT, Claude, Llama, etc. — can be used by
+changing one env var, no code changes required.
+
+Send back the finding exactly as the scan returned it (extra fields are
+ignored):
+
+```
+{
+  "algorithm": "RSA",
+  "severity": "critical",
+  "attack_vector": "Shor's Algorithm",
+  "replacement": "ML-KEM (FIPS 203) for encryption; ML-DSA (FIPS 204) for signatures",
+  "replacement_reason": "Shor's Algorithm factors the RSA modulus in polynomial time...",
+  "identifier": "rsa.generate_private_key",
+  "match_type": "call",
+  "language": "python",
+  "quantum_vulnerable": true,
+  "classical_vulnerable": false,
+  "file": "src/crypto.py",
+  "line": 12,
+  "code_snippet": "private_key = rsa.generate_private_key(key_size=2048)",
+  "fix_snippet": "import oqs\nkem = oqs.KeyEncapsulation('ML-KEM-768')"
+}
+```
+
+`code_snippet` (the flagged line, captured by the scanner) and `fix_snippet`
+(the recommended replacement) are what make the answer specific to your code
+rather than a description of RSA in general. Every scanner emits both; send
+them.
+
+which returns:
+
+```
+{"explanation": "...", "model": "openai/gpt-4o-mini", "cached": false}
+```
+
+Explanations are cached in MongoDB for 30 days, keyed by the *content* of the
+finding — algorithm, severity, attack vector, identifier, match type,
+language, and the two code snippets — rather than by file or repo. Two
+identical lines of `RSA` anywhere in a codebase share one cached explanation
+and one OpenRouter call; two different lines never do, because an explanation
+that names one file's variables must not be served for another's. If MongoDB
+is unreachable, caching is skipped and every call goes straight to OpenRouter;
+the feature still works, it's just not free.
+
+Because each cache miss costs a completion, the endpoint is rate limited to 30
+requests per 10 minutes per client address, and answers `429` beyond that. The
+window is per backend process: it resets on restart and is not shared between
+workers.
+
+Requires `OPENROUTER_API_KEY` (see Environment Variables below). Without it,
+`/scan/explain` returns `502` with a message telling you to set it — the rest
+of the app is unaffected.
 
 ### Auth
 

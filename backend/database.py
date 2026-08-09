@@ -48,6 +48,10 @@ def get_scans() -> AsyncIOMotorCollection:
     return get_db().scans
 
 
+def get_explanations() -> AsyncIOMotorCollection:
+    return get_db().explanations
+
+
 async def create_indexes() -> None:
     """Create every index QLint relies on.
 
@@ -63,6 +67,11 @@ async def create_indexes() -> None:
         (db.scans, [("created_at", DESCENDING)], {}),
         # Cache lookup: newest non-expired scan for a repo.
         (db.scans, [("repo_url", ASCENDING), ("created_at", DESCENDING)], {}),
+        # AI explanation cache: one entry per finding signature.
+        (db.explanations, [("key", ASCENDING)], {"unique": True}),
+        # ...and let Mongo drop each entry once its expires_at passes, rather
+        # than filtering expired docs out of every read forever.
+        (db.explanations, [("expires_at", ASCENDING)], {"expireAfterSeconds": 0}),
     ]
     for collection, keys, options in specs:
         try:

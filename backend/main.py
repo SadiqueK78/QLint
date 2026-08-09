@@ -10,6 +10,7 @@ import database
 from routers.admin_router import router as admin_router
 from routers.auth_router import router as auth_router
 from routers.benchmark_router import router as benchmark_router
+from routers.explain_router import router as explain_router
 from routers.hndl_router import router as hndl_router
 from routers.oauth_router import router as oauth_router
 from routers.scan_router import router as scan_router
@@ -30,6 +31,9 @@ async def lifespan(app: FastAPI):
     app.state.github = httpx.AsyncClient(
         base_url="https://api.github.com", headers=headers, timeout=30.0
     )
+    # Shared async client for OpenRouter (AI explanation) calls. Auth header
+    # is per-request in ai_explainer.py, not set here.
+    app.state.openrouter = httpx.AsyncClient(timeout=30.0)
 
     database.connect()
     # A missing database must not stop the server: anonymous scanning still
@@ -47,6 +51,7 @@ async def lifespan(app: FastAPI):
     yield
 
     await app.state.github.aclose()
+    await app.state.openrouter.aclose()
     await database.close()
 
 
@@ -63,6 +68,7 @@ app.add_middleware(
 app.include_router(auth_router, tags=["auth"])
 app.include_router(oauth_router, tags=["auth"])
 app.include_router(scan_router, tags=["scan"])
+app.include_router(explain_router, tags=["scan"])
 app.include_router(user_router, tags=["user"])
 app.include_router(admin_router, tags=["admin"])
 app.include_router(hndl_router, tags=["hndl"])

@@ -1269,6 +1269,75 @@ input {
   background: var(--bg);
 }
 
+.fix-toggle:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.finding-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.explain-toggle {
+  color: var(--accent, var(--text-secondary));
+  border-color: var(--accent, var(--border-strong));
+}
+
+/* explain panel */
+
+.explain-body {
+  margin-top: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.explain-loading {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.explain-text {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.explain-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.explain-error p {
+  font-size: 13px;
+  color: var(--critical);
+  margin: 0;
+}
+
+.explain-retry {
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 3px 10px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.explain-retry:hover {
+  background: var(--bg);
+}
+
 /* fix panels */
 
 .fix-panels {

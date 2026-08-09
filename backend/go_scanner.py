@@ -12,6 +12,13 @@ file was written in.
 
 import re
 
+from scanner_common import (
+    attach_snippets,
+    line_starts,
+    normalize_attack_vector,
+    position,
+    line_text,
+)
 from vulnerability_db import find_algorithm
 
 # ----------------------------------------------------------------- helpers
@@ -87,30 +94,8 @@ def _strip_comments(source: str) -> str:
     return "".join(out)
 
 
-def _line_starts(source: str) -> list[int]:
-    starts = [0]
-    for index, char in enumerate(source):
-        if char == "\n":
-            starts.append(index + 1)
-    return starts
-
-
-def _position(starts: list[int], offset: int) -> tuple[int, int]:
-    """Translate a character offset into 1-based line and 0-based column."""
-    low, high = 0, len(starts) - 1
-    while low < high:
-        mid = (low + high + 1) // 2
-        if starts[mid] <= offset:
-            low = mid
-        else:
-            high = mid - 1
-    return low + 1, offset - starts[low]
-
-
-def _line_text(source: str, starts: list[int], line: int) -> str:
-    start = starts[line - 1]
-    end = starts[line] if line < len(starts) else len(source)
-    return source[start:end]
+# line_starts, position and line_text live in scanner_common: js_scanner needs
+# the identical implementation, and so does the code_snippet capture.
 
 
 # ------------------------------------------------------- synthetic findings
@@ -123,7 +108,7 @@ _SYNTHETIC: dict[str, dict] = {
         "severity": "info",
         "quantum_vulnerable": False,
         "classical_vulnerable": False,
-        "attack_vector": "None",
+        "attack_vector": None,
         "replacement": None,
         "replacement_reason": "The crypto/tls package itself is not vulnerable; the negotiated cipher suites, certificate key types, and curve preferences configured through it determine the risk.",
         "fix_snippet": "// Inspect tls.Config: CipherSuites, CurvePreferences, and the certificate\n// key type decide whether this connection is quantum-vulnerable.",
@@ -133,7 +118,7 @@ _SYNTHETIC: dict[str, dict] = {
         "severity": "info",
         "quantum_vulnerable": False,
         "classical_vulnerable": False,
-        "attack_vector": "None",
+        "attack_vector": None,
         "replacement": None,
         "replacement_reason": "The key length is not declared in this file. AES-128 is weakened by Grover's Algorithm to ~64 bits; AES-256 stays quantum-safe.",
         "fix_snippet": "// Declare the key length explicitly, and prefer 32 bytes:\n// key := make([]byte, 32)  // AES-256\n// block, err := aes.NewCipher(key)",
@@ -154,8 +139,11 @@ def _finding(
         "severity": entry["severity"],
         "quantum_vulnerable": entry["quantum_vulnerable"],
         "classical_vulnerable": entry["classical_vulnerable"],
-        "attack_vector": entry["attack_vector"],
+        "attack_vector": normalize_attack_vector(entry["attack_vector"]),
         "replacement": entry["replacement"],
+        # BEFORE: the flagged source line, filled in by attach_snippets once
+        # every rule has run. AFTER: the recommended replacement.
+        "code_snippet": "",
         "fix_snippet": entry.get("go_fix_snippet") or entry["fix_snippet"],
         "replacement_reason": entry["replacement_reason"],
     }
@@ -166,7 +154,7 @@ def _synthetic_finding(
 ) -> dict:
     note = _SYNTHETIC[kind]
     return {"line": line, "col": col, "identifier": identifier,
-            "match_type": match_type, **note}
+            "match_type": match_type, "code_snippet": "", **note}
 
 
 # -------------------------------------------------------------- AES sizing
@@ -342,14 +330,16 @@ def scan_go_source(source_code: str, filename: str = "") -> list[dict]:
             return []  # binary blob, not source
 
         cleaned = _strip_comments(source_code)
-        starts = _line_starts(cleaned)
+        # _strip_comments replaces comment characters with spaces one for one,
+        # so these offsets address the original source just as well.
+        starts = line_starts(cleaned)
         findings: list[dict] = []
 
         for pattern, match_type, handler in _RULES:
             for match in pattern.finditer(cleaned):
-                line, col = _position(starts, match.start())
+                line, col = position(starts, match.start())
                 entry, synthetic = handler(
-                    match, _line_text(cleaned, starts, line), cleaned
+                    match, line_text(cleaned, starts, line), cleaned
                 )
                 identifier = match.group(0).strip()
                 if entry is not None:
@@ -360,6 +350,10 @@ def scan_go_source(source_code: str, filename: str = "") -> list[dict]:
                     findings.append(
                         _synthetic_finding(line, col, identifier, match_type, synthetic)
                     )
+
+        # Snippets come from the original source, not `cleaned`: the developer
+        # should see the line as they wrote it, comments included.
+        attach_snippets(findings, source_code, starts)
 
         best: dict[tuple[int, str], dict] = {}
         for finding in findings:

@@ -19,9 +19,28 @@ jobs:
         uses: ./.github/actions/qlint-scan
         with:
           fail-on: critical
-          # The benchmark measures classical RSA-2048/ECDSA-P256 as the baseline
-          # it compares PQC against — deliberate subjects, not vulnerabilities.
-          exclude: backend/pqc_benchmark.py,backend/tests/test_pqc_benchmark.py
+          # Excluded from QLint scanning itself, and why:
+          #
+          #   backend/pqc_benchmark.py   The benchmark measures classical
+          #                              RSA-2048/ECDSA-P256 as the baseline it
+          #                              compares PQC against — deliberate
+          #                              subjects, not vulnerabilities.
+          #
+          #   backend/tests/test_*.py    Test code names crypto on purpose: it
+          #                              builds vulnerable fixtures to prove the
+          #                              scanners detect them, and helpers like
+          #                              _rsa_finding() tokenize to "rsa" and
+          #                              match as function calls. Neither ships.
+          #                              Excluded as a pattern rather than file
+          #                              by file, so a new detection test does
+          #                              not break the build on the way in.
+          #
+          # Deliberately NOT excluded: production files that merely use SHA-256
+          # non-cryptographically (e.g. explain_router.py's cache key). Those
+          # surface as warning/info, which fail-on:critical does not fail the
+          # build over, and muting a shipped file would hide a real finding in
+          # it later.
+          exclude: backend/pqc_benchmark.py,backend/tests/test_*.py
 
       # always(): a scan that fails the build is the case whose results are
       # most worth seeing in the Security tab, and the step above exits 1 there.
