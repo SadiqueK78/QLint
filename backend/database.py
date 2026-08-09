@@ -52,6 +52,13 @@ def get_explanations() -> AsyncIOMotorCollection:
     return get_db().explanations
 
 
+def get_patches() -> AsyncIOMotorCollection:
+    """Cached migration diffs. Separate from explanations rather than sharing
+    the collection: the two are keyed the same way but hold different content,
+    and one feature's TTL sweep must not evict the other's entries."""
+    return get_db().patches
+
+
 async def create_indexes() -> None:
     """Create every index QLint relies on.
 
@@ -72,6 +79,9 @@ async def create_indexes() -> None:
         # ...and let Mongo drop each entry once its expires_at passes, rather
         # than filtering expired docs out of every read forever.
         (db.explanations, [("expires_at", ASCENDING)], {"expireAfterSeconds": 0}),
+        # AI patch cache: same two indexes, same reasoning, its own collection.
+        (db.patches, [("key", ASCENDING)], {"unique": True}),
+        (db.patches, [("expires_at", ASCENDING)], {"expireAfterSeconds": 0}),
     ]
     for collection, keys, options in specs:
         try:

@@ -817,11 +817,16 @@ function copyText(text) {
   return Promise.resolve();
 }
 
-// Only the fields ai_explainer.py actually reads get sent. That includes the
+// Only the fields the backend actually reads get sent. That includes the
 // flagged line (code_snippet) and the suggested fix (fix_snippet): without
 // them the model can only describe the algorithm in the abstract, which is
 // the one thing its prompt tells it not to do.
-function explainRequestBody(finding) {
+//
+// /scan/explain and /scan/patch take the same shape, so one builder serves
+// both. The two snippets are merely important to an explanation but required
+// by a patch, which refuses with a 400 rather than invent a diff against code
+// it was never shown.
+function findingRequestBody(finding) {
   return {
     algorithm: finding.algorithm,
     severity: finding.severity,
@@ -923,11 +928,85 @@ function ExplainBody({ loading, error, explanation, onRetry }) {
   );
 }
 
+// A unified diff is only readable if the three line kinds are told apart at a
+// glance, so each line is classed by its first character -- the same signal
+// the diff format itself uses. Everything else (file headers, hunk headers)
+// is chrome around those.
+function diffLineClass(line) {
+  if (line.startsWith("+++") || line.startsWith("---")) return "diff-file";
+  if (line.startsWith("@@")) return "diff-hunk";
+  if (line.startsWith("+")) return "diff-add";
+  if (line.startsWith("-")) return "diff-del";
+  return "diff-ctx";
+}
+
+function DiffView({ patch }) {
+  return (
+    <pre className="diff-body">
+      {patch.split("\n").map((line, index) => (
+        // Lines have no identity of their own and the list never reorders,
+        // so the index is the honest key here.
+        <span className={`diff-line ${diffLineClass(line)}`} key={index}>
+          {line || " "}
+        </span>
+      ))}
+    </pre>
+  );
+}
+
+function PatchBody({ loading, error, patch, model, cached, onRetry }) {
+  return (
+    <div className="patch-body">
+      {loading && (
+        <p className="explain-loading">
+          {"Generating a migration patch for this finding…"}
+        </p>
+      )}
+      {!loading && error && (
+        <div className="explain-error">
+          <p>{error}</p>
+          <button className="explain-retry" type="button" onClick={onRetry}>
+            Try again
+          </button>
+        </div>
+      )}
+      {!loading && !error && patch && (
+        <div className="patch-panel">
+          <div className="patch-header">
+            <span className="fix-panel-title patch-title">
+              Migration Patch
+            </span>
+            <div className="patch-header-right">
+              {model && <span className="patch-model">{model}</span>}
+              {cached && <span className="patch-cached">cached</span>}
+              <CopyButton text={patch} variant="neutral" />
+            </div>
+          </div>
+          <DiffView patch={patch} />
+          <p className="patch-note">
+            AI-generated. Review the diff before applying it &mdash; line
+            numbers in the hunk header are approximate.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function FindingRow({ finding, fixKey, fixExpanded, onToggleFix }) {
   const [explainOpen, setExplainOpen] = useState(false);
   const [explainLoading, setExplainLoading] = useState(false);
   const [explainError, setExplainError] = useState(null);
   const [explanation, setExplanation] = useState(null);
+  const [patchOpen, setPatchOpen] = useState(false);
+  const [patchLoading, setPatchLoading] = useState(false);
+  const [patchError, setPatchError] = useState(null);
+  const [patch, setPatch] = useState(null);
+
+  // /scan/patch requires both snippets and 400s without them. Every scanner
+  // emits both today, so this only ever guards against a finding that reached
+  // the UI from somewhere else -- cheaper than spending a request to be told.
+  const canPatch = !!(finding.code_snippet && finding.fix_snippet);
 
   const fetchExplanation = async () => {
     setExplainLoading(true);
@@ -936,7 +1015,7 @@ function FindingRow({ finding, fixKey, fixExpanded, onToggleFix }) {
       const res = await fetch(`${API_BASE}/scan/explain`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(explainRequestBody(finding)),
+        body: JSON.stringify(findingRequestBody(finding)),
       });
       const body = await res.json().catch(() => null);
       if (!res.ok) throw new Error(body?.detail || `HTTP ${res.status}`);
@@ -960,6 +1039,44 @@ function FindingRow({ finding, fixKey, fixExpanded, onToggleFix }) {
   const retryExplain = () => {
     setExplanation(null);
     fetchExplanation();
+  };
+
+  const fetchPatch = async () => {
+    setPatchLoading(true);
+    setPatchError(null);
+    try {
+      const res = await fetch(`${API_BASE}/scan/patch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(findingRequestBody(finding)),
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(body?.detail || `HTTP ${res.status}`);
+      setPatch({
+        diff: body.patch,
+        model: body.model,
+        cached: body.cached,
+      });
+    } catch (err) {
+      setPatchError(err.message || "Could not generate a patch.");
+    } finally {
+      setPatchLoading(false);
+    }
+  };
+
+  const togglePatch = () => {
+    if (patchOpen) {
+      setPatchOpen(false);
+      return;
+    }
+    setPatchOpen(true);
+    // The patch is kept once fetched, so reopening the panel is free.
+    if (!patch && !patchLoading) fetchPatch();
+  };
+
+  const retryPatch = () => {
+    setPatch(null);
+    fetchPatch();
   };
 
   return (
@@ -1007,6 +1124,20 @@ function FindingRow({ finding, fixKey, fixExpanded, onToggleFix }) {
             ? "Hide explanation"
             : "Explain with AI"}
         </button>
+        {canPatch && (
+          <button
+            className="fix-toggle patch-toggle"
+            type="button"
+            onClick={togglePatch}
+            disabled={patchLoading}
+          >
+            {patchLoading
+              ? "Generating…"
+              : patchOpen
+              ? "Hide patch"
+              : "Generate Patch"}
+          </button>
+        )}
       </div>
       {fixExpanded && <FixPanels snippet={finding.fix_snippet} />}
       {explainOpen && (
@@ -1015,6 +1146,16 @@ function FindingRow({ finding, fixKey, fixExpanded, onToggleFix }) {
           error={explainError}
           explanation={explanation}
           onRetry={retryExplain}
+        />
+      )}
+      {patchOpen && (
+        <PatchBody
+          loading={patchLoading}
+          error={patchError}
+          patch={patch?.diff}
+          model={patch?.model}
+          cached={patch?.cached}
+          onRetry={retryPatch}
         />
       )}
     </div>

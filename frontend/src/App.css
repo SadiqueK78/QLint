@@ -1338,6 +1338,120 @@ input {
   background: var(--bg);
 }
 
+/* patch panel */
+
+.patch-toggle {
+  color: var(--info);
+  border-color: var(--info-border);
+}
+
+.patch-body {
+  margin-top: 8px;
+}
+
+.patch-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.patch-header {
+  padding: 8px 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.patch-title {
+  color: var(--info);
+}
+
+.patch-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.patch-model {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.patch-cached {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--safe);
+  background: var(--safe-bg);
+  border: 1px solid var(--safe-border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  flex-shrink: 0;
+}
+
+/* The diff itself. Long lines scroll inside the panel rather than widening
+   the finding card, so a wide hunk cannot push the layout sideways. */
+.patch-body .diff-body {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 0;
+  padding: 10px 0;
+  overflow-x: auto;
+  background: var(--surface);
+  color: var(--text-primary);
+}
+
+.diff-line {
+  display: block;
+  padding: 0 14px;
+  white-space: pre;
+}
+
+.diff-add {
+  background: var(--safe-bg);
+  color: var(--safe);
+}
+
+.diff-del {
+  background: var(--critical-bg);
+  color: var(--critical);
+}
+
+.diff-hunk {
+  color: var(--info);
+  background: var(--info-bg);
+}
+
+.diff-file {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.diff-ctx {
+  color: var(--text-secondary);
+}
+
+.patch-note {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+  margin: 0;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+
 /* fix panels */
 
 .fix-panels {

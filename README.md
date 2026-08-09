@@ -4,7 +4,7 @@ Scan GitHub repositories for quantum-vulnerable cryptographic algorithms and get
 
 ## What it does
 
-QLint scans the Python, JavaScript, TypeScript, and Go code in any public GitHub repository and detects cryptographic algorithms that will be broken (RSA, ECC, DSA, Diffie-Hellman) or weakened (AES-128, SHA-256) by quantum computers. Python detection is AST-based — it parses real syntax trees instead of grepping text, so algorithm names in comments or strings never produce false positives. JavaScript and TypeScript have no stdlib parser to lean on, so they are scanned with context-aware patterns that strip comments and string noise before matching. Every finding comes with a severity rating, the quantum attack vector, and a ready-to-use fix snippet showing the migration to the NIST-standardized post-quantum replacement (ML-KEM, ML-DSA, SLH-DSA). The whole repository is summarized into a PQC readiness score from 0 to 100.
+QLint scans the Python, JavaScript, TypeScript, and Go code in any public GitHub repository and detects cryptographic algorithms that will be broken (RSA, ECC, DSA, Diffie-Hellman) or weakened (AES-128, SHA-256) by quantum computers. Python detection is AST-based — it parses real syntax trees instead of grepping text, so algorithm names in comments or strings never produce false positives. JavaScript and TypeScript have no stdlib parser to lean on, so they are scanned with context-aware patterns that strip comments and string noise before matching. Every finding comes with a severity rating, the quantum attack vector, and a ready-to-use fix snippet showing the migration to the NIST-standardized post-quantum replacement (ML-KEM, ML-DSA, SLH-DSA). Any finding can also be explained in plain English or turned into a copy-paste unified diff, both generated against your actual code. The whole repository is summarized into a PQC readiness score from 0 to 100.
 
 ## Tech Stack
 
@@ -33,10 +33,14 @@ QLint/
 │   │   ├── admin_router.py
 │   │   ├── auth_router.py
 │   │   ├── benchmark_router.py  # PQC benchmark lab
+│   │   ├── explain_router.py    # AI explanations, cached
 │   │   ├── hndl_router.py       # Harvest Now, Decrypt Later risk
 │   │   ├── oauth_router.py
+│   │   ├── patch_router.py      # AI migration patches, cached
 │   │   ├── scan_router.py
 │   │   └── user_router.py
+│   ├── ai_explainer.py          # OpenRouter prompt for plain-English answers
+│   ├── patch_generator.py       # OpenRouter prompt for unified-diff patches
 │   ├── github_client.py         # repo/file fetching, extension mapping
 │   ├── vulnerability_db.py      # CRYPTO_DB: severities, fixes, NIST standards
 │   ├── ast_scanner.py           # Python (AST)
@@ -165,7 +169,7 @@ GITHUB_TOKEN=your_token_here
 | `GITHUB_CLIENT_SECRET` | —                           | GitHub OAuth app client secret             |
 | `GITHUB_OAUTH_REDIRECT_URI` | `http://localhost:8000/auth/github/callback` | Must match the OAuth app callback |
 | `FRONTEND_URL`         | `http://localhost:5174`     | Where the OAuth callback sends the browser |
-| `OPENROUTER_API_KEY`   | —                           | Enables `/scan/explain` (AI explanations). Get one at [openrouter.ai/keys](https://openrouter.ai/keys) |
+| `OPENROUTER_API_KEY`   | —                           | Enables `/scan/explain` (AI explanations) and `/scan/patch` (AI migration patches). Get one at [openrouter.ai/keys](https://openrouter.ai/keys) |
 | `OPENROUTER_MODEL`     | `openai/gpt-4o-mini`        | Any model slug OpenRouter hosts (GPT, Claude, Llama, ...) |
 | `OPENROUTER_SITE_URL`  | `http://localhost:5174`     | Sent as `HTTP-Referer` per OpenRouter's app-identification convention |
 | `OPENROUTER_SITE_NAME` | `QLint`                     | Sent as `X-Title` per OpenRouter's app-identification convention |
@@ -255,6 +259,7 @@ push and pull request.
 | POST   | `/scan/preview` | List scannable source files | Body: `{"repo_url": "https://github.com/owner/repo"}`   |
 | POST   | `/scan`         | Full vulnerability scan  | Body: `{"repo_url": "https://github.com/owner/repo", "force_refresh": false}` |
 | POST   | `/scan/explain` | Explain one finding in plain English (AI) | Body: a finding object from a scan report |
+| POST   | `/scan/patch`   | Generate a migration patch for one finding (AI) | Body: a finding object; `code_snippet` and `fix_snippet` required |
 
 Authentication is **optional** on `/scan`. Anonymous scans work as before; send
 `Authorization: Bearer <token>` to attribute the scan to an account and have it
@@ -319,6 +324,75 @@ workers.
 Requires `OPENROUTER_API_KEY` (see Environment Variables below). Without it,
 `/scan/explain` returns `502` with a message telling you to set it — the rest
 of the app is unaffected.
+
+### AI Migration Patches
+
+Where `/scan/explain` answers *why is this a problem*, `POST /scan/patch`
+answers *what exactly do I change*. It returns a unified diff migrating one
+finding from the flagged code to its quantum-safe replacement — the same
+format `git apply` and every code review tool already understands.
+
+In the UI, each finding gets a **Generate Patch** button next to *Explain with
+AI*. The diff renders with added, removed, and context lines colour-coded, and
+a **Copy** button puts the whole patch on your clipboard.
+
+Send the finding exactly as the scan returned it, the same shape
+`/scan/explain` takes:
+
+```
+curl -X POST http://localhost:8000/scan/patch \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "algorithm": "RSA",
+    "severity": "critical",
+    "file": "src/crypto.py",
+    "line": 12,
+    "language": "python",
+    "code_snippet": "private_key = rsa.generate_private_key(key_size=2048)",
+    "fix_snippet": "import oqs\nkem = oqs.KeyEncapsulation(\"ML-KEM-768\")"
+  }'
+```
+
+which returns:
+
+```
+{
+  "patch": "--- a/src/crypto.py\n+++ b/src/crypto.py\n@@ -12,1 +12,2 @@\n-private_key = rsa.generate_private_key(key_size=2048)\n+kem = oqs.KeyEncapsulation('ML-KEM-768')\n+public_key = kem.generate_keypair()\n",
+  "model": "openai/gpt-4o-mini",
+  "cached": false
+}
+```
+
+**`code_snippet` and `fix_snippet` are required here**, unlike on
+`/scan/explain` where they are merely strongly recommended. A patch without the
+real code is a fabricated diff against lines that may not exist, and a
+developer could try to apply it — so the endpoint returns `400` naming the
+missing field instead of guessing. Every scanner emits both fields on every
+finding, so a finding taken straight from a scan report always qualifies.
+
+The model is instructed to remove the flagged line character for character,
+match the surrounding indentation and naming style, change only what the
+migration requires, and add any needed imports as a separate hunk at the
+import block. A response cut off by the token limit is rejected rather than
+returned, because a truncated hunk is not a short patch — it is an unapplyable
+one.
+
+Patches are cached in MongoDB for 30 days in their own `patches` collection,
+keyed by finding content including both snippets, on the same terms as
+explanations: two identical vulnerable lines share one patch and one
+OpenRouter call, two different ones never do. If MongoDB is unreachable,
+caching is skipped and the feature still works.
+
+Rate limited to **15 requests per 10 minutes** per client address — tighter
+than the explainer's 30, because a diff is a longer completion at a larger
+token cap. The two limits are separate buckets, so working through patches
+cannot lock you out of explanations, or the reverse.
+
+Requires `OPENROUTER_API_KEY`, the same key the explainer uses; there is no new
+configuration for this feature. Without it, `/scan/patch` returns `502`.
+
+> AI-generated patches are a starting point, not a merge candidate. Review the
+> diff before applying it — hunk header line numbers are approximate.
 
 ### Auth
 
