@@ -278,6 +278,11 @@ input {
   color: #ffffff;
 }
 
+.sidebar-item-active {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+}
+
 /* The wrapper is a full-height flex column so the footer is pushed to the
    bottom of the viewport even on short views (scanning, empty results). */
 .app-wrapper {
@@ -632,144 +637,6 @@ input {
   color: var(--text-muted);
   margin: 16px 0 0;
   text-align: center;
-}
-
-/* ---------------------------------------------------------- pricing */
-
-.pricing {
-  width: 100%;
-  background: var(--bg);
-  padding: 64px 0;
-  text-align: center;
-}
-
-.pricing-inner {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 0 40px;
-}
-
-.pricing h2 {
-  font-size: 32px;
-  font-weight: 700;
-  color: var(--text-primary);
-  letter-spacing: -0.5px;
-  margin: 0;
-}
-
-.pricing-sub {
-  font-size: 16px;
-  color: var(--text-secondary);
-  margin: 8px 0 0;
-}
-
-.pricing-cards {
-  display: flex;
-  justify-content: center;
-  gap: 20px;
-  flex-wrap: wrap;
-  margin: 40px auto 0;
-  max-width: 100%;
-}
-
-.price-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 28px;
-  flex: 1;
-  min-width: 220px;
-  max-width: 280px;
-  box-shadow: var(--shadow);
-  display: flex;
-  flex-direction: column;
-  text-align: left;
-}
-
-.price-popular {
-  border: 2px solid var(--navy);
-  position: relative;
-}
-
-.popular-badge {
-  background: var(--navy);
-  color: #ffffff;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.5px;
-  padding: 3px 10px;
-  border-radius: 100px;
-  position: absolute;
-  top: -10px;
-  right: 16px;
-}
-
-.plan-name {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.plan-price {
-  font-size: 36px;
-  font-weight: 700;
-  color: var(--text-primary);
-  margin-top: 12px;
-}
-
-.plan-period {
-  font-size: 13px;
-  color: var(--text-muted);
-}
-
-.plan-divider {
-  border-top: 1px solid var(--border);
-  margin: 20px 0;
-}
-
-.plan-features {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  font-size: 14px;
-  color: var(--text-secondary);
-  flex: 1;
-}
-
-.cta-ghost {
-  width: 100%;
-  border: 1px solid var(--border-strong);
-  background: transparent;
-  color: var(--text-primary);
-  padding: 10px;
-  border-radius: var(--radius);
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  margin-top: 24px;
-}
-
-.cta-ghost:hover {
-  background: var(--bg);
-}
-
-.cta-navy {
-  width: 100%;
-  background: var(--navy);
-  color: #ffffff;
-  border: none;
-  padding: 10px;
-  border-radius: var(--radius);
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  margin-top: 24px;
-}
-
-.cta-navy:hover {
-  background: var(--navy-hover);
 }
 
 /* ---------------------------------------------------------- scanning */
@@ -1685,14 +1552,6 @@ input {
 /* ---------------------------------------------------------- responsive */
 
 @media (max-width: 1024px) {
-  .pricing-cards {
-    flex-wrap: wrap;
-  }
-
-  .price-card {
-    min-width: 40%;
-  }
-
   .score-row {
     flex-wrap: wrap;
   }
@@ -1778,25 +1637,6 @@ input {
 
   .langs {
     padding: 28px 16px;
-  }
-
-  .pricing {
-    padding: 48px 0;
-  }
-
-  .pricing-inner {
-    padding: 0 16px;
-  }
-
-  .pricing-cards {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .price-card {
-    width: 100%;
-    max-width: 100%;
-    min-width: 0;
   }
 
   .results {
@@ -2223,7 +2063,6 @@ input {
 }
 
 [data-theme="dark"] .scan-card,
-[data-theme="dark"] .price-card,
 [data-theme="dark"] .file-header,
 [data-theme="dark"] .file-body,
 [data-theme="dark"] .score-card,
@@ -2341,7 +2180,6 @@ input {
 
 /* Primary/CTA buttons in dark mode: white fill with dark text, no green */
 [data-theme="dark"] .scan-btn,
-[data-theme="dark"] .cta-navy,
 [data-theme="dark"] .results-actions .btn-primary,
 [data-theme="dark"] .cta-white {
   background: #ffffff;
@@ -2350,16 +2188,10 @@ input {
 }
 
 [data-theme="dark"] .scan-btn:hover,
-[data-theme="dark"] .cta-navy:hover,
 [data-theme="dark"] .results-actions .btn-primary:hover,
 [data-theme="dark"] .cta-white:hover {
   background: #e2e8f0;
   color: #0f172a;
-}
-
-[data-theme="dark"] .popular-badge {
-  background: #00ff41;
-  color: #0a0a0a;
 }
 
 [data-theme="dark"] .tab-active,
@@ -2370,10 +2202,6 @@ input {
 
 [data-theme="dark"] .progress-inner {
   background: #00ff41;
-}
-
-[data-theme="dark"] .price-popular {
-  border-color: #00ff41;
 }
 
 [data-theme="dark"] .scan-input:focus {
@@ -3424,6 +3252,144 @@ input {
   }
 
   .hndl-metric {
+    align-items: flex-start;
+  }
+}
+
+/* ------------------------------------------------- static pages (about/help) */
+
+/* Both pages are plain content on the theme variables, so they follow the
+   light/dark toggle without needing their own [data-theme] block. */
+
+.page {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 48px 40px 80px;
+}
+
+.page-header {
+  margin-bottom: 32px;
+}
+
+.page-title {
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  color: var(--text-primary);
+  margin: 0 0 12px;
+}
+
+.page-intro {
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+/* ----------------------------------------------------------------- about */
+
+.team-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.team-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  padding: 20px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.team-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.team-role {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+.team-links {
+  display: flex;
+  gap: 10px;
+}
+
+.team-link {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 7px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.team-link:hover {
+  background: var(--bg);
+  border-color: var(--text-muted);
+}
+
+/* ------------------------------------------------------------------ help */
+
+.doc-section {
+  margin-top: 36px;
+}
+
+.doc-heading {
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.2px;
+  color: var(--text-primary);
+  margin: 0 0 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.doc-text {
+  font-size: 15px;
+  line-height: 1.75;
+  color: var(--text-secondary);
+  margin: 0 0 14px;
+}
+
+.doc-text:last-child {
+  margin-bottom: 0;
+}
+
+.doc-text code {
+  font-family: var(--mono);
+  font-size: 13px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.doc-text a {
+  color: var(--info);
+}
+
+@media (max-width: 768px) {
+  .page {
+    padding: 32px 20px 60px;
+  }
+
+  .page-title {
+    font-size: 26px;
+  }
+
+  .team-card {
     align-items: flex-start;
   }
 }

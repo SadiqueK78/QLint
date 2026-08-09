@@ -1,13 +1,26 @@
 import { useEffect, useState } from "react";
 import "./App.css";
 import PqcBenchmark from "./PqcBenchmark";
+import About from "./About";
+import Help from "./Help";
 import { API_BASE } from "./api";
 
-// The app is a single view-switcher, so "routing" here is just the two paths
-// that have to be linkable from outside: the scanner and the public benchmark
-// page. Vite serves index.html for both, so a direct visit works.
+// The app is a single view-switcher, so "routing" here is just the paths that
+// have to be linkable from outside: the scanner and the standalone pages.
+// Vite serves index.html for all of them, so a direct visit works.
 const HOME_PATH = "/";
 const BENCHMARK_PATH = "/benchmark";
+const ABOUT_PATH = "/about";
+const HELP_PATH = "/help";
+
+// Each standalone page renders instead of the scanner. Keeping them in one
+// table means the navbar, the sidebar, and the main switch all agree on what
+// counts as "not the scanner" without three copies of the same path list.
+const PAGES = [
+  { path: BENCHMARK_PATH, label: "PQC Benchmark Lab", render: () => <PqcBenchmark /> },
+  { path: ABOUT_PATH, label: "About", render: () => <About /> },
+  { path: HELP_PATH, label: "Help", render: () => <Help /> },
+];
 const SEVERITY_RANK = { critical: 0, warning: 1, safe: 2, info: 3 };
 const FILTER_TABS = [
   { key: "all", label: "All Issues" },
@@ -237,18 +250,21 @@ function Navbar({
         </div>
         <div className="nav-actions">
           <ThemeToggle theme={theme} onToggle={onToggleTheme} />
-          <a
-            className={`nav-btn${
-              route === BENCHMARK_PATH ? " nav-btn-active" : ""
-            }`}
-            href={BENCHMARK_PATH}
-            onClick={(e) => {
-              e.preventDefault();
-              onNavigate(BENCHMARK_PATH);
-            }}
-          >
-            PQC Benchmark Lab
-          </a>
+          {PAGES.map((page) => (
+            <a
+              key={page.path}
+              className={`nav-btn${
+                route === page.path ? " nav-btn-active" : ""
+              }`}
+              href={page.path}
+              onClick={(e) => {
+                e.preventDefault();
+                onNavigate(page.path);
+              }}
+            >
+              {page.label}
+            </a>
+          ))}
           <a
             className="nav-btn"
             href="https://github.com/Abhushan187/QLint"
@@ -325,17 +341,22 @@ function Navbar({
         />
       )}
       <nav className={`sidebar${sidebarOpen ? " sidebar-open" : ""}`}>
-        <a
-          className="sidebar-item"
-          href={BENCHMARK_PATH}
-          onClick={(e) => {
-            e.preventDefault();
-            closeSidebar();
-            onNavigate(BENCHMARK_PATH);
-          }}
-        >
-          PQC Benchmark Lab
-        </a>
+        {PAGES.map((page) => (
+          <a
+            key={page.path}
+            className={`sidebar-item${
+              route === page.path ? " sidebar-item-active" : ""
+            }`}
+            href={page.path}
+            onClick={(e) => {
+              e.preventDefault();
+              closeSidebar();
+              onNavigate(page.path);
+            }}
+          >
+            {page.label}
+          </a>
+        ))}
         <a
           className="sidebar-item"
           href="https://github.com/Abhushan187/QLint"
@@ -597,105 +618,6 @@ function LanguagesStrip() {
           More languages are in active development. Python, JavaScript,
           TypeScript, and Go scanning are available now.
         </p>
-      </div>
-    </section>
-  );
-}
-
-const PRICING_PLANS = [
-  {
-    name: "Free",
-    price: "$0",
-    period: "forever",
-    features: [
-      "5 repository scans",
-      "Python codebase support",
-      "NIST PQC migration report",
-      "Standard fix snippets",
-    ],
-    cta: "Get started",
-    highlighted: false,
-  },
-  {
-    name: "Developer",
-    price: "$9",
-    period: "/ month",
-    features: [
-      "20 repository scans / month",
-      "Python codebase support",
-      "NIST PQC migration report",
-      "Standard fix snippets",
-      "Scan history",
-    ],
-    cta: "Start free trial",
-    highlighted: false,
-  },
-  {
-    name: "Team",
-    price: "$29",
-    period: "/ month",
-    features: [
-      "100 repository scans / month",
-      "Python + JS/TS support (Q4 2026)",
-      "NIST PQC migration report",
-      "Standard fix snippets",
-      "Scan history + team dashboard",
-      "Priority support",
-    ],
-    cta: "Get started",
-    highlighted: true,
-  },
-  {
-    name: "Enterprise",
-    price: "$79",
-    period: "/ month",
-    features: [
-      "Unlimited repository scans",
-      "All supported languages",
-      "NIST PQC migration report",
-      "AI context-aware patches (coming soon)",
-      "Admin dashboard + usage analytics",
-      "GitHub App integration",
-      "Dedicated support",
-    ],
-    cta: "Contact us",
-    highlighted: false,
-  },
-];
-
-function Pricing() {
-  return (
-    <section className="pricing">
-      <div className="pricing-inner">
-        <h2>Simple, transparent pricing</h2>
-        <p className="pricing-sub">Start free. Scale as you grow.</p>
-        <div className="pricing-cards">
-        {PRICING_PLANS.map((plan) => (
-          <div
-            className={`price-card${plan.highlighted ? " price-popular" : ""}`}
-            key={plan.name}
-          >
-            {plan.highlighted && (
-              <span className="popular-badge">Most Popular</span>
-            )}
-            <div className="plan-name">{plan.name}</div>
-            <div className="plan-price">{plan.price}</div>
-            <div className="plan-period">{plan.period}</div>
-            <div className="plan-divider" />
-            <div className="plan-features">
-              {plan.features.map((feature) => (
-                <div key={feature}>{feature}</div>
-              ))}
-            </div>
-            <button
-              className={plan.highlighted ? "cta-navy" : "cta-ghost"}
-              type="button"
-            >
-              {plan.cta}
-            </button>
-          </div>
-        ))}
-        </div>
       </div>
     </section>
   );
@@ -2122,6 +2044,8 @@ export default function App() {
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
+  const activePage = PAGES.find((page) => page.path === route) ?? null;
+
   const navigate = (path) => {
     if (window.location.pathname !== path) {
       window.history.pushState({}, "", path);
@@ -2531,8 +2455,8 @@ export default function App() {
       {toast && <Toast message={toast} />}
       <div className="main-content">
         <main className="main">
-          {route === BENCHMARK_PATH && <PqcBenchmark />}
-          {route !== BENCHMARK_PATH && view === "input" && (
+          {activePage && activePage.render()}
+          {!activePage && view === "input" && (
             <>
               <Hero />
               <ScanInputCard
@@ -2552,14 +2476,13 @@ export default function App() {
                 onClearError={() => setError(null)}
               />
               <LanguagesStrip />
-              <Pricing />
               <FooterCTA />
             </>
           )}
-          {route !== BENCHMARK_PATH && view === "scanning" && (
+          {!activePage && view === "scanning" && (
             <ScanningView repoUrl={repoUrl} />
           )}
-          {route !== BENCHMARK_PATH && view === "results" && scanResult && (
+          {!activePage && view === "results" && scanResult && (
             <ResultsView
               result={scanResult}
               activeFilter={activeFilter}
