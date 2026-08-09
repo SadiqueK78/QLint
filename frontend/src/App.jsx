@@ -1,7 +1,13 @@
 import { useEffect, useState } from "react";
 import "./App.css";
+import PqcBenchmark from "./PqcBenchmark";
+import { API_BASE } from "./api";
 
-const API_BASE = "http://localhost:8000";
+// The app is a single view-switcher, so "routing" here is just the two paths
+// that have to be linkable from outside: the scanner and the public benchmark
+// page. Vite serves index.html for both, so a direct visit works.
+const HOME_PATH = "/";
+const BENCHMARK_PATH = "/benchmark";
 const SEVERITY_RANK = { critical: 0, warning: 1, safe: 2, info: 3 };
 const FILTER_TABS = [
   { key: "all", label: "All Issues" },
@@ -68,9 +74,16 @@ function expandedFromResult(data) {
   return expanded;
 }
 
-function Logo() {
+function Logo({ onNavigate }) {
   return (
-    <a href="#" className="logo">
+    <a
+      href={HOME_PATH}
+      className="logo"
+      onClick={(e) => {
+        e.preventDefault();
+        onNavigate(HOME_PATH);
+      }}
+    >
       <svg width="32" height="32" viewBox="0 0 32 32" aria-hidden="true">
         <polygon
           points="28,16 22,26.39 10,26.39 4,16 10,5.61 22,5.61"
@@ -201,6 +214,8 @@ function Navbar({
   onShowHistory,
   onShowAdmin,
   onDisconnectGithub,
+  route,
+  onNavigate,
 }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const closeSidebar = () => setSidebarOpen(false);
@@ -218,10 +233,22 @@ function Navbar({
             <span className="hamburger-line" />
             <span className="hamburger-line" />
           </button>
-          <Logo />
+          <Logo onNavigate={onNavigate} />
         </div>
         <div className="nav-actions">
           <ThemeToggle theme={theme} onToggle={onToggleTheme} />
+          <a
+            className={`nav-btn${
+              route === BENCHMARK_PATH ? " nav-btn-active" : ""
+            }`}
+            href={BENCHMARK_PATH}
+            onClick={(e) => {
+              e.preventDefault();
+              onNavigate(BENCHMARK_PATH);
+            }}
+          >
+            PQC Benchmark Lab
+          </a>
           <a
             className="nav-btn"
             href="https://github.com/Abhushan187/QLint"
@@ -298,6 +325,17 @@ function Navbar({
         />
       )}
       <nav className={`sidebar${sidebarOpen ? " sidebar-open" : ""}`}>
+        <a
+          className="sidebar-item"
+          href={BENCHMARK_PATH}
+          onClick={(e) => {
+            e.preventDefault();
+            closeSidebar();
+            onNavigate(BENCHMARK_PATH);
+          }}
+        >
+          PQC Benchmark Lab
+        </a>
         <a
           className="sidebar-item"
           href="https://github.com/Abhushan187/QLint"
@@ -710,17 +748,47 @@ function buildReportText(result) {
   return lines.join("\n");
 }
 
-function downloadReport(result) {
-  const date = new Date().toISOString().slice(0, 10);
-  const blob = new Blob([buildReportText(result)], { type: "text/plain" });
+function saveBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `qlint-report-${result.repo.replace("/", "-")}-${date}.txt`;
+  link.download = filename;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
+}
+
+function reportFilename(result, extension) {
+  const date = new Date().toISOString().slice(0, 10);
+  return `qlint-report-${result.repo.replace("/", "-")}-${date}.${extension}`;
+}
+
+function downloadReport(result) {
+  const blob = new Blob([buildReportText(result)], { type: "text/plain" });
+  saveBlob(blob, reportFilename(result, "txt"));
+}
+
+// SARIF is built server-side so the rule catalog and severity mapping stay in
+// one place. A signed-in user's scan has an id to address; an anonymous one
+// does not, so that path asks the scan endpoint to render the cached result
+// as SARIF instead.
+async function downloadSarif(result, authToken) {
+  const response =
+    result.scan_id && authToken
+      ? await fetch(`${API_BASE}/user/scans/${result.scan_id}/sarif`, {
+          headers: { Authorization: `Bearer ${authToken}` },
+        })
+      : await fetch(`${API_BASE}/scan?format=sarif`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ repo_url: `https://github.com/${result.repo}` }),
+        });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new Error(body?.detail || `HTTP ${response.status}`);
+  }
+  saveBlob(await response.blob(), reportFilename(result, "sarif"));
 }
 
 function splitFixSnippet(snippet) {
@@ -1214,6 +1282,21 @@ function ResultsView({
     ])
     .filter(([, findings]) => findings.length > 0);
 
+  const [sarifBusy, setSarifBusy] = useState(false);
+  const [sarifError, setSarifError] = useState(null);
+
+  const getSarif = async () => {
+    setSarifBusy(true);
+    setSarifError(null);
+    try {
+      await downloadSarif(result, authToken);
+    } catch (err) {
+      setSarifError(err.message || "Could not build the SARIF file.");
+    } finally {
+      setSarifBusy(false);
+    }
+  };
+
   const toggleFile = (file) =>
     setExpandedFiles((prev) => ({ ...prev, [file]: !prev[file] }));
   const toggleFix = (key) =>
@@ -1239,21 +1322,33 @@ function ResultsView({
             {result.scan_duration_seconds}s
           </div>
         </div>
-        <div className="results-actions">
-          <button
-            className="btn-ghost btn-small"
-            type="button"
-            onClick={() => downloadReport(result)}
-          >
-            Download Report
-          </button>
-          <button
-            className="btn-primary btn-small"
-            type="button"
-            onClick={onReset}
-          >
-            Scan Another Repository
-          </button>
+        <div className="results-actions-wrap">
+          <div className="results-actions">
+            <button
+              className="btn-ghost btn-small"
+              type="button"
+              onClick={() => downloadReport(result)}
+            >
+              Download Report
+            </button>
+            <button
+              className="btn-ghost btn-small"
+              type="button"
+              onClick={getSarif}
+              disabled={sarifBusy}
+              title="SARIF 2.1.0, for GitHub Code Scanning and SARIF viewers"
+            >
+              {sarifBusy ? "Building SARIF..." : "Download SARIF"}
+            </button>
+            <button
+              className="btn-primary btn-small"
+              type="button"
+              onClick={onReset}
+            >
+              Scan Another Repository
+            </button>
+          </div>
+          {sarifError && <div className="sarif-error">{sarifError}</div>}
         </div>
       </div>
 
@@ -1819,6 +1914,7 @@ function Footer() {
 }
 
 export default function App() {
+  const [route, setRoute] = useState(() => window.location.pathname);
   const [view, setView] = useState("input");
   const [theme, setTheme] = useState("light");
   const [repoUrl, setRepoUrl] = useState("");
@@ -1871,6 +1967,21 @@ export default function App() {
   };
 
   useEffect(fetchRateLimit, []);
+
+  // Keep the back button working now that there is more than one path.
+  useEffect(() => {
+    const onPopState = () => setRoute(window.location.pathname);
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  const navigate = (path) => {
+    if (window.location.pathname !== path) {
+      window.history.pushState({}, "", path);
+    }
+    setRoute(path);
+    window.scrollTo(0, 0);
+  };
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -2267,11 +2378,14 @@ export default function App() {
           setShowAdmin(true);
         }}
         onDisconnectGithub={disconnectGithub}
+        route={route}
+        onNavigate={navigate}
       />
       {toast && <Toast message={toast} />}
       <div className="main-content">
         <main className="main">
-          {view === "input" && (
+          {route === BENCHMARK_PATH && <PqcBenchmark />}
+          {route !== BENCHMARK_PATH && view === "input" && (
             <>
               <Hero />
               <ScanInputCard
@@ -2295,8 +2409,10 @@ export default function App() {
               <FooterCTA />
             </>
           )}
-          {view === "scanning" && <ScanningView repoUrl={repoUrl} />}
-          {view === "results" && scanResult && (
+          {route !== BENCHMARK_PATH && view === "scanning" && (
+            <ScanningView repoUrl={repoUrl} />
+          )}
+          {route !== BENCHMARK_PATH && view === "results" && scanResult && (
             <ResultsView
               result={scanResult}
               activeFilter={activeFilter}

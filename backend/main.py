@@ -10,6 +10,7 @@ import database
 from routers.admin_router import router as admin_router
 from routers.auth_router import router as auth_router
 from routers.explain_router import router as explain_router
+from routers.benchmark_router import router as benchmark_router
 from routers.hndl_router import router as hndl_router
 from routers.oauth_router import router as oauth_router
 from routers.scan_router import router as scan_router
@@ -71,6 +72,9 @@ app.include_router(explain_router, tags=["scan"])
 app.include_router(user_router, tags=["user"])
 app.include_router(admin_router, tags=["admin"])
 app.include_router(hndl_router, tags=["hndl"])
+# Needs the liboqs native library. benchmark_router mounts either way and
+# answers 503 where liboqs is absent, so a Windows-native dev run still boots.
+app.include_router(benchmark_router, tags=["benchmark"])
 
 
 @app.get("/health")

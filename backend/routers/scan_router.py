@@ -7,7 +7,8 @@ from typing import Awaitable
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from pymongo import DESCENDING
 from pymongo.errors import PyMongoError
@@ -23,6 +24,7 @@ from github_client import (
     get_repo_files,
     parse_repo_url,
 )
+from sarif_converter import convert_to_sarif
 from scanner_engine import scan_repository
 
 load_dotenv()
@@ -130,11 +132,33 @@ async def _cache_store(repo_url: str, result: dict, user: dict | None) -> str | 
         return None  # a failed cache write must not fail the scan
 
 
+def _sarif_response(report: dict, repo_url: str) -> JSONResponse:
+    """Render a report as a downloadable SARIF file.
+
+    Named after the repo rather than a scan id: this path also serves anonymous
+    scans, which are stored without an owner and have no id to hand back.
+    """
+    slug = repo_url.rstrip("/").rsplit("/", 2)[-2:]
+    name = "-".join(part for part in slug if part) or "report"
+    return JSONResponse(
+        content=convert_to_sarif(report),
+        headers={
+            "Content-Disposition": f'attachment; filename="qlint-scan-{name}.sarif"'
+        },
+    )
+
+
 @router.post("/scan")
 async def scan(
     request: Request,
     body: ScanRequest,
     user: dict | None = Depends(get_optional_user),
+    format: str | None = Query(
+        default=None,
+        pattern="^sarif$",
+        description="Set to 'sarif' to receive SARIF 2.1.0 instead of the "
+        "normal report shape. Cached scans convert without re-scanning.",
+    ),
 ):
     token = _resolve_token(body, user)
     repo_url = _canonical_url(body.repo_url)
@@ -143,6 +167,10 @@ async def scan(
         cached = await _cache_lookup(repo_url)
         if cached:
             result = dict(cached["result"])
+            if format == "sarif":
+                # SARIF carries no cache metadata, so return the findings as
+                # they were stored rather than annotating them.
+                return _sarif_response(result, repo_url)
             result["cached"] = True
             result["cached_at"] = _iso(cached["created_at"])
             result["cache_expires_at"] = _iso(cached["expires_at"])
@@ -161,6 +189,8 @@ async def scan(
     report["cached"] = False
 
     scan_id = await _cache_store(repo_url, report, user)
+    if format == "sarif":
+        return _sarif_response(report, repo_url)
     # Anonymous scans are stored without an owner, so their id resolves for
     # nobody; leave it off rather than handing out one that always 404s.
     if scan_id and user:

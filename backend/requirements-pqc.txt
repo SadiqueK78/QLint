@@ -1,0 +1,8 @@
+# Extras for the PQC Benchmark Lab only, kept out of requirements.txt because
+# liboqs-python needs the liboqs C library built natively and would otherwise
+# block a fresh Windows-only setup of the rest of QLint.
+liboqs-python>=0.10
+# Already installed transitively via python-jose[cryptography] in
+# requirements.txt; pinned here too so a standalone PQC environment (the WSL
+# venv locally, the F25 container later) gets the classical RSA/ECDSA side.
+cryptography>=42.0

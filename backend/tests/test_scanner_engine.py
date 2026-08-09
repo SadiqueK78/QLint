@@ -1,12 +1,15 @@
-"""Tests for scanner_engine.scan_repository.
+"""Tests for scanner_engine's two entry points.
 
-The github_client layer is replaced with fakes via monkeypatch —
-no real API calls are made.
+scan_repository's github_client layer is replaced with fakes via monkeypatch —
+no real API calls are made. scan_directory runs against real temp directories.
 """
 
 import asyncio
 
+import pytest
+
 import scanner_engine
+from scanner_engine import scan_directory
 
 REPORT_KEYS = {
     "repo",
@@ -172,3 +175,150 @@ class TestScanRepository:
             "safe",
             "info",
         }
+
+
+class TestScanDirectory:
+    """The local path qlint_cli uses in CI. No network, no credentials."""
+
+    def test_report_matches_the_repo_scan_shape(self, tmp_path, sample_rsa_source):
+        (tmp_path / "a.py").write_text(sample_rsa_source, encoding="utf-8")
+        report = scan_directory(tmp_path)
+        # Same keys as a GitHub scan, minus the two that only a GitHub scan can
+        # know, plus the local path that replaces them.
+        assert set(report) == (REPORT_KEYS - {"rate_limit_remaining"}) | {"path"}
+        assert report["repo"] == tmp_path.name
+        assert "RSA" in report["algorithms_found"]
+
+    def test_findings_use_relative_posix_paths(self, tmp_path, sample_rsa_source):
+        nested = tmp_path / "src" / "crypto"
+        nested.mkdir(parents=True)
+        (nested / "keys.py").write_text(sample_rsa_source, encoding="utf-8")
+        report = scan_directory(tmp_path)
+        assert "src/crypto/keys.py" in report["findings_by_file"]
+        for finding in report["findings_by_file"]["src/crypto/keys.py"]:
+            assert finding["file"] == "src/crypto/keys.py"
+
+    def test_every_supported_language_is_picked_up(self, tmp_path):
+        (tmp_path / "a.py").write_text("import hashlib", encoding="utf-8")
+        (tmp_path / "b.js").write_text(
+            "crypto.createHash('md5');", encoding="utf-8"
+        )
+        (tmp_path / "c.ts").write_text(
+            "crypto.createSign('RSA-SHA256');", encoding="utf-8"
+        )
+        (tmp_path / "d.go").write_text(
+            "priv, _ := rsa.GenerateKey(rand.Reader, 2048)", encoding="utf-8"
+        )
+        report = scan_directory(tmp_path)
+        assert report["scanned_files"] == 4
+        assert report["languages_scanned"] == ["go", "javascript", "python", "typescript"]
+
+    def test_unsupported_extensions_are_ignored(self, tmp_path):
+        (tmp_path / "notes.md").write_text("rsa.generate_private_key()", encoding="utf-8")
+        (tmp_path / "config.yml").write_text("key: rsa", encoding="utf-8")
+        report = scan_directory(tmp_path)
+        assert report["scanned_files"] == 0
+        assert report["total_findings"] == 0
+
+    @pytest.mark.parametrize("excluded", ["node_modules", "__pycache__", ".git", ".venv"])
+    def test_vendored_and_hidden_trees_are_pruned(
+        self, tmp_path, sample_rsa_source, excluded
+    ):
+        skipped = tmp_path / excluded
+        skipped.mkdir()
+        (skipped / "dep.py").write_text(sample_rsa_source, encoding="utf-8")
+        (tmp_path / "app.py").write_text("x = 1", encoding="utf-8")
+        report = scan_directory(tmp_path)
+        assert report["scanned_files"] == 1
+        assert report["findings_by_file"] == {}
+
+    def test_an_empty_directory_scores_a_perfect_report(self, tmp_path):
+        report = scan_directory(tmp_path)
+        assert report["scanned_files"] == 0
+        assert report["total_findings"] == 0
+        assert report["pqc_readiness_score"] == 100
+
+    def test_oversized_files_are_skipped_not_scanned(
+        self, tmp_path, sample_rsa_source, monkeypatch
+    ):
+        monkeypatch.setattr(scanner_engine, "MAX_FILE_SIZE", 10)
+        (tmp_path / "big.py").write_text(sample_rsa_source, encoding="utf-8")
+        report = scan_directory(tmp_path)
+        assert report["skipped_files"] == ["big.py"]
+        assert report["scanned_files"] == 0
+
+    def test_exclude_patterns_drop_files_before_they_are_read(
+        self, tmp_path, sample_rsa_source
+    ):
+        (tmp_path / "keep.py").write_text(sample_rsa_source, encoding="utf-8")
+        (tmp_path / "drop.py").write_text(sample_rsa_source, encoding="utf-8")
+        report = scan_directory(tmp_path, exclude=["drop.py"])
+        assert report["scanned_files"] == 1
+        assert set(report["findings_by_file"]) == {"keep.py"}
+        assert report["skipped_files"] == []
+
+    def test_exclude_prunes_whole_subtrees(self, tmp_path, sample_rsa_source):
+        nested = tmp_path / "bench" / "deep"
+        nested.mkdir(parents=True)
+        (nested / "baseline.py").write_text(sample_rsa_source, encoding="utf-8")
+        (tmp_path / "app.py").write_text(sample_rsa_source, encoding="utf-8")
+        report = scan_directory(tmp_path, exclude=["bench"])
+        assert report["scanned_files"] == 1
+        assert set(report["findings_by_file"]) == {"app.py"}
+
+    @pytest.mark.parametrize(
+        "pattern", ["bench/baseline.py", "bench/*", "*/baseline.py", "bench"]
+    )
+    def test_pattern_spellings_that_must_all_match(
+        self, tmp_path, sample_rsa_source, pattern
+    ):
+        (tmp_path / "bench").mkdir()
+        (tmp_path / "bench" / "baseline.py").write_text(
+            sample_rsa_source, encoding="utf-8"
+        )
+        report = scan_directory(tmp_path, exclude=[pattern])
+        assert report["scanned_files"] == 0
+
+    @pytest.mark.parametrize(
+        "pattern", ["bench\\baseline.py", "./bench/baseline.py", "/bench/baseline.py"]
+    )
+    def test_separator_and_prefix_noise_in_patterns_is_normalized(
+        self, tmp_path, sample_rsa_source, pattern
+    ):
+        (tmp_path / "bench").mkdir()
+        (tmp_path / "bench" / "baseline.py").write_text(
+            sample_rsa_source, encoding="utf-8"
+        )
+        assert scan_directory(tmp_path, exclude=[pattern])["scanned_files"] == 0
+
+    def test_a_non_matching_pattern_excludes_nothing(self, tmp_path, sample_rsa_source):
+        (tmp_path / "app.py").write_text(sample_rsa_source, encoding="utf-8")
+        report = scan_directory(tmp_path, exclude=["nothing/here.py", "*.rs"])
+        assert report["scanned_files"] == 1
+
+    def test_pattern_matching_is_case_sensitive_on_every_platform(
+        self, tmp_path, sample_rsa_source
+    ):
+        # A Windows dev and a Linux runner must agree on what got excluded.
+        (tmp_path / "Bench").mkdir()
+        (tmp_path / "Bench" / "baseline.py").write_text(
+            sample_rsa_source, encoding="utf-8"
+        )
+        assert scan_directory(tmp_path, exclude=["bench"])["scanned_files"] == 1
+        assert scan_directory(tmp_path, exclude=["Bench"])["scanned_files"] == 0
+
+    def test_no_excludes_is_the_default(self, tmp_path, sample_rsa_source):
+        (tmp_path / "app.py").write_text(sample_rsa_source, encoding="utf-8")
+        assert scan_directory(tmp_path)["scanned_files"] == 1
+        assert scan_directory(tmp_path, exclude=None)["scanned_files"] == 1
+        assert scan_directory(tmp_path, exclude=[])["scanned_files"] == 1
+
+    def test_a_missing_directory_raises_not_a_directory(self, tmp_path):
+        with pytest.raises(NotADirectoryError):
+            scan_directory(tmp_path / "nope")
+
+    def test_a_file_path_raises_not_a_directory(self, tmp_path):
+        target = tmp_path / "a.py"
+        target.write_text("x = 1", encoding="utf-8")
+        with pytest.raises(NotADirectoryError):
+            scan_directory(target)

@@ -147,6 +147,12 @@ input {
   color: #ffffff;
 }
 
+.nav-btn-active {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.5);
+  color: #ffffff;
+}
+
 .btn-ghost {
   border: 1px solid rgba(255, 255, 255, 0.25);
   background: transparent;
@@ -869,9 +875,27 @@ input {
   margin-top: 4px;
 }
 
+.results-actions-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
 .results-actions {
   display: flex;
   gap: 10px;
+}
+
+.results-actions button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.sarif-error {
+  font-size: 12px;
+  color: var(--critical);
+  text-align: right;
 }
 
 .score-row {
@@ -1670,8 +1694,16 @@ input {
     gap: 12px;
   }
 
+  .results-actions-wrap {
+    align-items: stretch;
+  }
+
   .results-actions {
     flex-wrap: wrap;
+  }
+
+  .sarif-error {
+    text-align: left;
   }
 
   .score-row {
@@ -1724,6 +1756,329 @@ input {
 @media (max-width: 480px) {
   .hero h1 {
     font-size: 26px;
+  }
+}
+
+/* ---------------------------------------------------------- pqc benchmark */
+
+/* The whole page is built on the theme variables, so it follows the light/dark
+   toggle without needing its own [data-theme] block. */
+
+.pqc-page {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 48px 40px 80px;
+}
+
+.pqc-header {
+  max-width: 780px;
+  margin-bottom: 28px;
+}
+
+.pqc-title {
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  color: var(--text-primary);
+  margin: 0 0 12px;
+}
+
+.pqc-intro {
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.pqc-controls {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 24px;
+}
+
+/* .btn-primary is white-on-navy for the navbar; on the page background it
+   needs the inverted treatment the results view already uses. */
+.pqc-run {
+  background: var(--navy);
+  color: #ffffff;
+  padding: 10px 22px;
+  font-size: 15px;
+}
+
+.pqc-run:hover:not(:disabled) {
+  background: var(--navy-hover);
+}
+
+.pqc-run:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+[data-theme="dark"] .pqc-run {
+  background: var(--text-primary);
+  color: #0a0a0a;
+}
+
+.pqc-hint {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.pqc-error {
+  background: var(--critical-bg);
+  border: 1px solid var(--critical-border);
+  color: var(--critical);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  font-size: 14px;
+  margin-bottom: 24px;
+}
+
+.pqc-meta {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 20px;
+}
+
+.pqc-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-muted);
+  margin: 28px 0 10px;
+}
+
+/* Eight columns of numbers do not fit a phone, so the table scrolls inside
+   its own box rather than pushing the page sideways. */
+.pqc-table-scroll {
+  overflow-x: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.pqc-table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.pqc-table th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.pqc-table td {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.pqc-table tr:last-child td {
+  border-bottom: none;
+}
+
+.pqc-algo {
+  font-family: var(--mono);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.pqc-row-pqc td {
+  background: var(--info-bg);
+}
+
+.pqc-row-pqc .pqc-algo {
+  color: var(--info);
+}
+
+.pqc-row-error td {
+  background: var(--critical-bg);
+  color: var(--critical);
+  white-space: normal;
+}
+
+.pqc-takeaway {
+  max-width: 780px;
+  margin: 28px 0 0;
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--text-primary);
+}
+
+.pqc-note {
+  max-width: 780px;
+  margin: 12px 0 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+
+/* Security level pickers. Shaped like the HNDL calculator's fields so the two
+   sets of controls on the site read as the same component. */
+
+.pqc-levels {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+.pqc-level {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pqc-level-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.pqc-select {
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: 9px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.pqc-select:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.pqc-level-hint {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  max-width: 280px;
+  padding-bottom: 8px;
+}
+
+/* Size comparison bars */
+
+.pqc-charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 16px;
+}
+
+.pqc-chart {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px 20px 16px;
+}
+
+.pqc-chart-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 16px;
+}
+
+.pqc-chart-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Fixed label and value columns, so every bar starts and ends at the same x
+   and their lengths can be compared by eye without reading the numbers. */
+.pqc-bar-row {
+  display: grid;
+  grid-template-columns: 96px 1fr 72px;
+  align-items: center;
+  gap: 12px;
+}
+
+.pqc-bar-label {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pqc-bar-track {
+  background: var(--bg);
+  border-radius: 4px;
+  height: 18px;
+  overflow: hidden;
+}
+
+.pqc-bar {
+  height: 100%;
+  border-radius: 4px;
+  /* ECDSA's public key is under 3% of ML-DSA-87's. Without a floor that bar
+     would round away to nothing, and "almost invisible" is the honest reading
+     of the number, not "absent". */
+  min-width: 3px;
+  transition: width 0.3s ease;
+}
+
+.pqc-bar-pqc {
+  background: var(--info);
+}
+
+.pqc-bar-classical {
+  background: var(--text-muted);
+}
+
+.pqc-bar-value {
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.pqc-chart-caption {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-muted);
+  margin: 16px 0 0;
+}
+
+@media (max-width: 768px) {
+  .pqc-page {
+    padding: 32px 20px 60px;
+  }
+
+  .pqc-title {
+    font-size: 26px;
+  }
+
+  .pqc-charts {
+    grid-template-columns: 1fr;
+  }
+
+  .pqc-bar-row {
+    grid-template-columns: 84px 1fr 64px;
+    gap: 8px;
   }
 }
 
