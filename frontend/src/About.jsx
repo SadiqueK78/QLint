@@ -26,7 +26,7 @@ export default function About() {
   return (
     <div className="page">
       <div className="page-header">
-        <h1 className="page-title">About</h1>
+        <h1 className="page-title">About Us</h1>
       </div>
       <div className="team-list">
         {TEAM.map((member) => (

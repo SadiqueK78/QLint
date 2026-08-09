@@ -38,6 +38,12 @@ const PAGES = [
 
 const NAV_PAGES = PAGES.filter((page) => page.nav);
 
+// Shown in place of Generate Patch on findings stored before the scanners
+// began attaching the flagged source line. Nothing is broken -- the data to
+// diff against simply is not in that saved report.
+const PATCH_UNAVAILABLE_HINT =
+  "This saved scan predates per-finding source capture, so there is no original line to generate a diff against. Scan the repository again and the button returns.";
+
 const README_URL = "https://github.com/Abhushan187/QLint#readme";
 const REPO_URL = "https://github.com/Abhushan187/QLint";
 const SEVERITY_RANK = { critical: 0, warning: 1, safe: 2, info: 3 };
@@ -114,17 +120,6 @@ function formatDateTime(iso) {
     minute: "2-digit",
   });
   return `${day} at ${time}`;
-}
-
-/** Open the files that hold something worth acting on. */
-function expandedFromResult(data) {
-  const expanded = {};
-  for (const [file, findings] of Object.entries(data.findings_by_file || {})) {
-    expanded[file] = findings.some(
-      (f) => f.severity === "critical" || f.severity === "warning"
-    );
-  }
-  return expanded;
 }
 
 function Logo({ onGoHome }) {
@@ -270,6 +265,47 @@ function CloseIcon({ size = 14 }) {
     >
       <path d="M18 6 L6 18" />
       <path d="M6 6 L18 18" />
+    </svg>
+  );
+}
+
+function TrashIcon({ size = 14 }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M4 7 h16" />
+      <path d="M10 4 h4" />
+      <path d="M6 7 l1 13 h10 l1 -13" />
+      <path d="M10 11 v6" />
+      <path d="M14 11 v6" />
+    </svg>
+  );
+}
+
+function HomeIcon({ size = 16 }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M3 11 L12 3 L21 11" />
+      <path d="M5.5 9.5 V20 h13 V9.5" />
     </svg>
   );
 }
@@ -1070,6 +1106,15 @@ function FindingRow({ finding, fixKey, fixExpanded, onToggleFix }) {
               : "Generate Patch"}
           </button>
         )}
+        {!canPatch && (
+          // Findings saved before scanners started attaching code_snippet
+          // (F22) have no flagged line to diff against, so the patch endpoint
+          // would refuse them anyway. Say why instead of silently omitting
+          // the button -- a fresh scan of the same repository restores it.
+          <span className="patch-unavailable" title={PATCH_UNAVAILABLE_HINT}>
+            Re-scan to enable patch generation
+          </span>
+        )}
       </div>
       {fixExpanded && <FixPanels snippet={finding.fix_snippet} />}
       {explainOpen && (
@@ -1654,7 +1699,7 @@ function AuthModal({ mode, loading, error, onSubmit, onClose, onSwitch }) {
   );
 }
 
-function HistoryPanel({ user, scans, loading, error, onClose, onOpen, onDelete }) {
+function HistoryPanel({ user, scans, loading, error, onGoHome, onOpen, onDelete }) {
   return (
     <div className="history-overlay">
       <div className="history-inner">
@@ -1668,10 +1713,11 @@ function HistoryPanel({ user, scans, loading, error, onClose, onOpen, onDelete }
           <button
             className="icon-btn"
             type="button"
-            onClick={onClose}
-            aria-label="Close scan history"
+            onClick={onGoHome}
+            aria-label="Go home"
+            title="Home"
           >
-            <CloseIcon size={16} />
+            <HomeIcon />
           </button>
         </div>
 
@@ -1699,12 +1745,13 @@ function HistoryPanel({ user, scans, loading, error, onClose, onOpen, onDelete }
                   className="icon-btn icon-btn-danger"
                   type="button"
                   aria-label="Delete scan"
+                  title="Delete this scan"
                   onClick={(e) => {
                     e.stopPropagation();
                     onDelete(scan.id);
                   }}
                 >
-                  <CloseIcon />
+                  <TrashIcon />
                 </button>
               </div>
               <div className="history-stats">
@@ -1956,27 +2003,6 @@ function AdminPanel({
   );
 }
 
-function FooterCTA() {
-  const scrollToScan = () => {
-    const el = document.getElementById("scan-input");
-    if (el) el.scrollIntoView({ behavior: "smooth" });
-  };
-  return (
-    <section className="cta-banner">
-      <div className="cta-inner">
-        <h2>Ready to secure your entire organization?</h2>
-        <p>
-          Connect QLint with your GitHub organization to continuously scan
-          repositories and prevent quantum-vulnerable code from shipping.
-        </p>
-        <button className="cta-white" type="button" onClick={scrollToScan}>
-          Get Started
-        </button>
-      </div>
-    </section>
-  );
-}
-
 function FooterColumn({ title, children }) {
   return (
     <div className="footer-col">
@@ -2011,6 +2037,9 @@ function Footer({ onNavigate }) {
             <p className="footer-tagline">
               Post-quantum cryptography scanning for source repositories.
             </p>
+            {/* Stacked under the tagline rather than set apart on its own
+                row, which read as a second footer below the first. */}
+            <div className="footer-copy">QLint &copy; 2026</div>
           </div>
 
           <FooterColumn title="Product">
@@ -2040,14 +2069,6 @@ function Footer({ onNavigate }) {
             {internal(PRIVACY_PATH, "Privacy Policy")}
             <a href="mailto:abhushan4625@gmail.com">Contact</a>
           </FooterColumn>
-        </div>
-
-        <div className="footer-bottom">
-          <span className="footer-copy">QLint &copy; 2026</span>
-          <span className="footer-note">
-            Scans NIST FIPS 203/204 migration targets. Not a substitute for a
-            professional security review.
-          </span>
         </div>
       </div>
     </footer>
@@ -2330,7 +2351,9 @@ export default function App() {
       const data = await res.json();
       setRepoUrl(scan.repo_url);
       setScanResult(data);
-      setExpandedFiles(expandedFromResult(data));
+      // Every file starts collapsed: the report opens as a list of files
+      // and their counts, and a file is only unpacked when asked for.
+      setExpandedFiles({});
       setExpandedFixes({});
       setActiveFilter("all");
       setView("results");
@@ -2476,7 +2499,9 @@ export default function App() {
       }
 
       setScanResult(data);
-      setExpandedFiles(expandedFromResult(data));
+      // Every file starts collapsed: the report opens as a list of files
+      // and their counts, and a file is only unpacked when asked for.
+      setExpandedFiles({});
       setExpandedFixes({});
       setActiveFilter("all");
       setView("results");
@@ -2573,7 +2598,6 @@ export default function App() {
                 onClearError={() => setError(null)}
               />
               <LanguagesStrip />
-              <FooterCTA />
             </>
           )}
           {!activePage && view === "scanning" && (
@@ -2617,7 +2641,10 @@ export default function App() {
           scans={userScans}
           loading={historyLoading}
           error={historyError}
-          onClose={() => setShowHistory(false)}
+          onGoHome={() => {
+            setShowHistory(false);
+            goHome();
+          }}
           onOpen={openHistoryScan}
           onDelete={deleteHistoryScan}
         />
