@@ -6,6 +6,7 @@ import Help from "./Help";
 import Terms from "./Terms";
 import Privacy from "./Privacy";
 import { CopyButton, FixPanels } from "./FixPanels";
+import { ChevronIcon } from "./icons";
 import { API_BASE } from "./api";
 
 // The app is a single view-switcher, so "routing" here is just the paths that
@@ -1205,7 +1206,9 @@ function HndlCalculator({ scanId, authToken }) {
         <span className="hndl-title">HNDL Risk Calculator</span>
         <span className="file-header-right">
           <span className="file-badge">Harvest Now, Decrypt Later</span>
-          <span className={`chevron${open ? " chevron-open" : ""}`}>v</span>
+          <span className={`chevron${open ? " chevron-open" : ""}`}>
+            <ChevronIcon />
+          </span>
         </span>
       </div>
       {open && (
@@ -1562,7 +1565,7 @@ function ResultsView({
                       <span
                         className={`chevron${expanded ? " chevron-open" : ""}`}
                       >
-                        v
+                        <ChevronIcon />
                       </span>
                     </span>
                   </div>
@@ -1832,7 +1835,7 @@ function AdminPanel({
   usersPages,
   usersTotal,
   currentUserId,
-  onClose,
+  onGoHome,
   onPageChange,
   onDeleteUser,
 }) {
@@ -1855,10 +1858,11 @@ function AdminPanel({
           <button
             className="icon-btn"
             type="button"
-            onClick={onClose}
-            aria-label="Close admin dashboard"
+            onClick={onGoHome}
+            aria-label="Go home"
+            title="Home"
           >
-            <CloseIcon size={16} />
+            <HomeIcon />
           </button>
         </div>
 
@@ -2659,7 +2663,10 @@ export default function App() {
           usersPages={adminUsersPages}
           usersTotal={adminUsersTotal}
           currentUserId={user?.id}
-          onClose={() => setShowAdmin(false)}
+          onGoHome={() => {
+            setShowAdmin(false);
+            goHome();
+          }}
           onPageChange={setAdminUsersPage}
           onDeleteUser={deleteAdminUser}
         />

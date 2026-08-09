@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ChevronIcon } from "./icons";
 
 // Single-open accordion: opening an entry closes whatever else was open, so
 // the page never turns into the wall of prose it replaced. State is the index
@@ -94,19 +95,7 @@ function FaqItem({ entry, open, onToggle }) {
       >
         <span className="faq-question-text">{entry.q}</span>
         <span className={`faq-chevron${open ? " faq-chevron-open" : ""}`}>
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M6 9 L12 15 L18 9" />
-          </svg>
+          <ChevronIcon />
         </span>
       </button>
       {open && (
