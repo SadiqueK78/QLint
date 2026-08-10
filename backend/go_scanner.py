@@ -207,6 +207,7 @@ _FIXED = {
     # both, so they resolve to the Ed25519 entry rather than being waved
     # through as modern-and-therefore-safe.
     "ed25519": lambda: find_algorithm("ed25519"),
+    "elgamal": lambda: find_algorithm("elgamal"),
     "des": lambda: find_algorithm("des"),
     "rc4": lambda: find_algorithm("rc4"),
     "md5": lambda: find_algorithm("md5"),
@@ -302,6 +303,18 @@ _RULES: list[tuple[re.Pattern, str, object]] = [
     (re.compile(r"\bcurve25519\.[A-Z]\w*\s*\("), "function_call",
      _fixed("ed25519")),
     (re.compile(r"\bbox\.GenerateKey\s*\("), "function_call", _fixed("ed25519")),
+
+    # -- ElGamal ------------------------------------------------------------
+    # Go has no stdlib ElGamal. The only implementations with real reach are
+    # the OpenPGP ones: the frozen golang.org/x/crypto package (deprecated,
+    # but vendored into a great many trees) and ProtonMail's maintained fork,
+    # which is what go-git and the current PGP tooling depend on.
+    _import_rule("golang.org/x/crypto/openpgp/elgamal", _fixed("elgamal")),
+    _import_rule("github.com/ProtonMail/go-crypto/openpgp/elgamal",
+                 _fixed("elgamal")),
+    (re.compile(r"\belgamal\.[A-Z]\w*\s*\("), "function_call", _fixed("elgamal")),
+    (re.compile(r"\belgamal\.(?:PrivateKey|PublicKey)\b"), "pattern",
+     _fixed("elgamal")),
 
     # -- TLS cipher suite constants ---------------------------------------
     # ECDHE_RSA names both an ECDHE key exchange and an RSA certificate, so it

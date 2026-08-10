@@ -4,10 +4,11 @@ Built for CI. It scans a directory already on disk, so it needs no FastAPI
 server, no MongoDB, no authentication, and no GitHub credentials: nothing here
 imports main.py, auth.py, or database.py. The detection logic is exactly what
 the web app runs — the same scanners, the same aggregation in scanner_engine,
-and the same SARIF converter from the /sarif endpoints.
+and the same SARIF and CBOM converters from the /sarif and /cbom endpoints.
 
 Usage:
     python qlint_cli.py --path . --output qlint-results.sarif
+    python qlint_cli.py --path . --format cbom --output qlint-cbom.json
     python qlint_cli.py --path ./src --format json --fail-on warning
     python qlint_cli.py --path . --exclude "benchmarks/*,vendor/legacy.py"
     python qlint_cli.py --path . --fail-on none
@@ -22,6 +23,7 @@ import json
 import sys
 from pathlib import Path
 
+from cbom_converter import convert_to_cbom
 from sarif_converter import convert_to_sarif
 from scanner_engine import scan_directory
 
@@ -41,7 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="qlint_cli.py",
         description=(
             "Scan a directory for quantum-vulnerable cryptography and write "
-            "SARIF 2.1.0 (or the raw JSON report)."
+            "SARIF 2.1.0, a CycloneDX CBOM, or the raw JSON report."
         ),
     )
     parser.add_argument(
@@ -56,9 +58,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--format",
-        choices=["sarif", "json"],
+        choices=["sarif", "cbom", "json"],
         default="sarif",
-        help="sarif: SARIF 2.1.0 for code scanning tools. json: the raw report",
+        help=(
+            "sarif: SARIF 2.1.0 for code scanning tools. cbom: CycloneDX 1.6 "
+            "cryptography bill of materials. json: the raw report"
+        ),
     )
     parser.add_argument(
         "--exclude",
@@ -117,9 +122,15 @@ def failing_findings(report: dict, fail_on: str) -> list[dict]:
     )
 
 
+# --format value -> the converter that renders it. "json" is absent on
+# purpose: it is the report itself, with nothing to convert.
+CONVERTERS = {"sarif": convert_to_sarif, "cbom": convert_to_cbom}
+
+
 def render_output(report: dict, output_format: str) -> str:
-    if output_format == "sarif":
-        return json.dumps(convert_to_sarif(report), indent=2)
+    convert = CONVERTERS.get(output_format)
+    if convert is not None:
+        return json.dumps(convert(report), indent=2)
     return json.dumps(report, indent=2)
 
 

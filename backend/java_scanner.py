@@ -346,6 +346,7 @@ _FIXED = {
     # both, so they resolve to the Ed25519 entry rather than being waved
     # through as modern-and-therefore-safe.
     "ed25519": lambda: find_algorithm("ed25519"),
+    "elgamal": lambda: find_algorithm("elgamal"),
     "des": lambda: find_algorithm("des"),
     "3des": lambda: find_algorithm("3des"),
     "rc4": lambda: find_algorithm("rc4"),
@@ -406,6 +407,12 @@ _BC_CLASS_RULES: list[tuple[re.Pattern, str, object]] = [
      "pattern", _fixed("ed25519")),
     (re.compile(r"\bX25519(?:Agreement|KeyPairGenerator|PrivateKeyParameters)\b"),
      "pattern", _fixed("ed25519")),
+    # ElGamal reaches Java through Bouncy Castle only — the JDK's own providers
+    # ship no ElGamal, so the JCE spelling (getInstance("ElGamal")) is a BC
+    # call too and resolves through the crypto database's alias.
+    (re.compile(r"\bElGamal(?:KeyPairGenerator|Engine|ParametersGenerator"
+                r"|KeyParameters|PrivateKeyParameters|PublicKeyParameters"
+                r"|KeyGenerationParameters)\b"), "pattern", _fixed("elgamal")),
     (re.compile(r"\bMD5Digest\b"), "pattern", _fixed("md5")),
     (re.compile(r"\bSHA1Digest\b"), "pattern", _fixed("sha1")),
     (re.compile(r"\bSHA(?:224|256)Digest\b"), "pattern", _fixed("sha256")),

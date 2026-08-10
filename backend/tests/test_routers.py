@@ -472,3 +472,90 @@ def test_sarif_of_a_scan_with_no_findings_is_still_a_valid_log(
     run = response.json()["runs"][0]
     assert run["results"] == []
     assert run["tool"]["driver"]["rules"]  # the catalog ships regardless
+
+
+# --------------------------------------------------------------- /cbom route
+#
+# The CBOM endpoint is the sibling of /sarif and reuses its fixtures: same
+# stored scan, same ownership check, same download shape. What is asserted
+# here is only what differs -- the inventory semantics.
+
+
+def test_cbom_returns_a_valid_bom_for_an_owned_scan(sarif_owner):
+    response = sarif_owner.get(f"/user/scans/{SCAN_ID}/cbom")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["bomFormat"] == "CycloneDX"
+    assert body["specVersion"] == "1.6"
+    assert body["serialNumber"].startswith("urn:uuid:")
+    assert body["metadata"]["tools"][0]["name"] == "QLint"
+    assert body["components"]
+    for component in body["components"]:
+        assert component["type"] == "cryptographic-asset"
+        assert component["cryptoProperties"]["assetType"] == "algorithm"
+
+    # The stored path uses Windows separators; occurrence locations must not.
+    locations = {
+        occurrence["location"]
+        for component in body["components"]
+        for occurrence in component["evidence"]["occurrences"]
+    }
+    assert locations == {"auth/login.py", "utils/hash.py"}
+
+
+def test_cbom_groups_findings_into_one_component_per_algorithm(sarif_owner):
+    body = sarif_owner.get(f"/user/scans/{SCAN_ID}/cbom").json()
+    names = [component["name"] for component in body["components"]]
+    assert len(names) == len(set(names))
+
+
+def test_cbom_sends_a_download_filename(sarif_owner):
+    response = sarif_owner.get(f"/user/scans/{SCAN_ID}/cbom")
+    disposition = response.headers["content-disposition"]
+    assert "attachment" in disposition
+    assert f"qlint-scan-{SCAN_ID}.cbom.json" in disposition
+    assert response.headers["content-type"].startswith("application/json")
+
+
+def test_cbom_requires_a_jwt(sarif_client):
+    test_client, _ = sarif_client
+    response = test_client.get(f"/user/scans/{SCAN_ID}/cbom")
+    assert response.status_code == 401
+
+
+def test_cbom_404s_on_another_users_scan(sarif_client):
+    test_client, app = sarif_client
+    app.dependency_overrides[get_current_user] = lambda: {
+        "_id": OTHER_ID,
+        "email": "stranger@qlint.dev",
+    }
+    response = test_client.get(f"/user/scans/{SCAN_ID}/cbom")
+    app.dependency_overrides.clear()
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Scan not found"
+
+
+def test_cbom_404s_on_an_unknown_or_malformed_scan_id(sarif_owner):
+    for scan_id in ["652f1f77bcf86cd799439099", "not-an-object-id"]:
+        response = sarif_owner.get(f"/user/scans/{scan_id}/cbom")
+        assert response.status_code == 404
+
+
+def test_cbom_of_a_scan_with_no_findings_is_still_a_valid_bom(
+    sarif_client, monkeypatch
+):
+    test_client, app = sarif_client
+    empty = {**SARIF_SCAN, "result": {}}
+    monkeypatch.setattr(user_module, "get_scans", lambda: FakeScans([empty]))
+    app.dependency_overrides[get_current_user] = lambda: {
+        "_id": OWNER_ID,
+        "email": "owner@qlint.dev",
+    }
+    response = test_client.get(f"/user/scans/{SCAN_ID}/cbom")
+    app.dependency_overrides.clear()
+    assert response.status_code == 200
+    body = response.json()
+    assert body["bomFormat"] == "CycloneDX"
+    # Unlike SARIF, an empty scan means an empty inventory: a CBOM listing
+    # algorithms the code does not contain would be a false inventory.
+    assert body["components"] == []

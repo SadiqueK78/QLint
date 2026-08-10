@@ -220,6 +220,7 @@ _FIXED = {
     # agreement, and resolves to ECC — the entry whose replacement guidance
     # points at ML-KEM, which is what a key exchange needs.
     "ed25519": lambda: find_algorithm("ed25519"),
+    "elgamal": lambda: find_algorithm("elgamal"),
     "des": lambda: find_algorithm("des"),
     "3des": lambda: find_algorithm("3des"),
     "md5": lambda: find_algorithm("md5"),
@@ -307,6 +308,19 @@ _RUSTCRYPTO_RULES: list[tuple[re.Pattern, str, object]] = [
     _use_rule("x25519_dalek", _fixed("ecc")),
     _path_rule(r"\bx25519(?:_dalek)?::\w+", _fixed("ecc")),
     _path_rule(r"\bX25519\w*", _fixed("ecc")),
+
+    # ElGamal has no dominant Rust crate, so the whole small field is listed.
+    # Nearly all of them implement exponential ElGamal over an elliptic-curve
+    # group (Ristretto, curve25519, JubJub) for homomorphic or voting schemes;
+    # that variant rests on the elliptic-curve discrete log, so Shor's
+    # Algorithm breaks it exactly as it breaks the classic modular one.
+    # Longest alternatives first: `elgamal` would otherwise consume the prefix
+    # of `elgamal_ristretto` before the `::` check could reject it.
+    _use_rule(r"(?:elgamal_ristretto|elastic_elgamal|jubjub_elgamal"
+              r"|lnpbp_elgamal|rust_elgamal|elgamal)", _fixed("elgamal")),
+    _path_rule(r"\b(?:elgamal_ristretto|elastic_elgamal|jubjub_elgamal"
+               r"|lnpbp_elgamal|rust_elgamal|elgamal)::\w+", _fixed("elgamal")),
+    _path_rule(r"\bElGamal\w*", _fixed("elgamal")),
 
     _use_rule("dsa", _fixed("dsa")),
     _path_rule(r"\bdsa::\w+", _fixed("dsa")),

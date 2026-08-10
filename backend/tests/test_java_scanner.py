@@ -533,3 +533,63 @@ public class Signer {
         for finding in found:
             assert finding["code_snippet"]
             assert finding["fix_snippet"]
+
+
+class TestElGamal:
+    """ElGamal reaches Java through Bouncy Castle only.
+
+    The JDK's own providers ship no ElGamal, so getInstance("ElGamal") is a BC
+    call too — which is why the JCE spellings resolve through the crypto
+    database's alias while the lightweight API needs its own class rules.
+    """
+
+    def test_detects_elgamal_via_key_pair_generator(self):
+        found = scan_java_source(
+            'KeyPairGenerator kpg = KeyPairGenerator.getInstance("ElGamal", "BC");',
+            "A.java",
+        )
+        assert [f["algorithm"] for f in found] == ["ElGamal"]
+        assert found[0]["severity"] == "critical"
+        assert found[0]["quantum_vulnerable"] is True
+        assert found[0]["attack_vector"] == "Shor's Algorithm"
+
+    def test_detects_elgamal_via_a_cipher_transformation(self):
+        found = scan_java_source(
+            'Cipher c = Cipher.getInstance("ElGamal/None/PKCS1Padding");', "A.java"
+        )
+        assert [f["algorithm"] for f in found] == ["ElGamal"]
+
+    @pytest.mark.parametrize(
+        "class_name",
+        [
+            "ElGamalKeyPairGenerator",
+            "ElGamalEngine",
+            "ElGamalParametersGenerator",
+            "ElGamalKeyParameters",
+        ],
+    )
+    def test_detects_bouncy_castle_lightweight_classes(self, class_name):
+        source = f"{class_name} x = new {class_name}();"
+        assert algorithms(source) == ["ElGamal"]
+
+    def test_a_lightweight_class_displaces_the_generic_bc_note(self):
+        source = (
+            "import org.bouncycastle.jce.provider.BouncyCastleProvider;\n"
+            "import org.bouncycastle.crypto.generators.ElGamalKeyPairGenerator;\n"
+            "ElGamalKeyPairGenerator gen = new ElGamalKeyPairGenerator();\n"
+        )
+        found = scan_java_source(source, "A.java")
+        assert {f["algorithm"] for f in found} == {"ElGamal"}
+        assert not any(f["severity"] == "info" for f in found)
+
+    def test_elgamal_is_not_reported_as_dsa_or_diffie_hellman(self):
+        assert algorithms('KeyPairGenerator.getInstance("ElGamal");') == ["ElGamal"]
+
+    def test_elgamal_in_a_javadoc_is_not_a_finding(self):
+        source = '/** Uses Cipher.getInstance("ElGamal") internally. */\nclass A {}\n'
+        assert scan_java_source(source, "A.java") == []
+
+    def test_finding_carries_both_snippets(self):
+        found = scan_java_source('KeyPairGenerator.getInstance("ElGamal");', "A.java")
+        assert found[0]["code_snippet"]
+        assert "BouncyCastlePQCProvider" in found[0]["fix_snippet"]

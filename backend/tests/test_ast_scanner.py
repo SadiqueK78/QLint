@@ -82,3 +82,51 @@ class TestOutputShape:
         for finding in findings:
             missing = REQUIRED_FIELDS - finding.keys()
             assert not missing, f"finding missing fields: {missing}"
+
+
+class TestElGamal:
+    """pycryptodome is the one Python library with a first-class ElGamal API.
+
+    The `cryptography` package has no ElGamal at all, so Crypto.PublicKey /
+    Cryptodome.PublicKey is the whole realistic surface. No ast_scanner change
+    was needed for any of this: the scanner is database-driven, so the
+    CRYPTO_DB entry is what makes these resolve.
+    """
+
+    def test_detects_pycryptodome_elgamal_import(self):
+        source = "from Crypto.PublicKey import ElGamal"
+        findings = scan_python_source(source)
+        assert "ElGamal" in algorithms(findings)
+        assert findings[0]["severity"] == "critical"
+        assert findings[0]["quantum_vulnerable"] is True
+        assert findings[0]["attack_vector"] == "Shor's Algorithm"
+
+    def test_detects_the_cryptodome_fork_too(self):
+        source = "from Cryptodome.PublicKey import ElGamal"
+        assert "ElGamal" in algorithms(scan_python_source(source))
+
+    def test_detects_a_fully_qualified_module_import(self):
+        source = "import Crypto.PublicKey.ElGamal"
+        assert "ElGamal" in algorithms(scan_python_source(source))
+
+    def test_detects_key_generation(self):
+        source = (
+            "from Crypto.PublicKey import ElGamal\n"
+            "key = ElGamal.generate(2048, get_random_bytes)\n"
+        )
+        findings = scan_python_source(source)
+        assert [f["algorithm"] for f in findings] == ["ElGamal", "ElGamal"]
+        assert [f["line"] for f in findings] == [1, 2]
+
+    def test_elgamal_is_not_reported_as_diffie_hellman(self):
+        # Both rest on the discrete log, but they are separate entries with
+        # separate replacement guidance.
+        source = "from Crypto.PublicKey import ElGamal"
+        assert algorithms(scan_python_source(source)) == {"ElGamal"}
+
+    def test_findings_carry_both_snippets(self):
+        source = "from Crypto.PublicKey import ElGamal"
+        for finding in scan_python_source(source):
+            assert finding["code_snippet"]
+            assert finding["fix_snippet"]
+            assert "ML-KEM" in finding["fix_snippet"]

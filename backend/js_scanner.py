@@ -223,6 +223,7 @@ _FIXED = {
     "ecc": lambda: find_algorithm("ecdsa"),
     "dh": lambda: find_algorithm("diffie-hellman"),
     "ed25519": lambda: find_algorithm("ed25519"),
+    "elgamal": lambda: find_algorithm("elgamal"),
 }
 
 
@@ -291,6 +292,16 @@ _RULES: list[tuple[re.Pattern, str, object]] = [
     (re.compile(r"\bnoble-secp256k1\b|\bnoble/secp256k1\b|\bsecp256k1\b"),
      "import", _fixed("ecc")),
     (re.compile(r"\belliptic\b"), "import", _fixed("ecc")),
+
+    # -- ElGamal -----------------------------------------------------------
+    # JavaScript has no ElGamal library with meaningful adoption: node-forge
+    # does not implement it, and the npm packages that do are dormant. These
+    # rules are exact module specifiers and one OpenPGP.js enum path rather
+    # than anything looser, because a broad /elgamal/i would match prose in a
+    # crypto library's own source far more often than a real call site.
+    (re.compile(r"""(?:require\(\s*|from\s*)['"](?:basic_simple_)?elgamal['"]"""),
+     "import", _fixed("elgamal")),
+    (re.compile(r"\benums\.publicKey\.elgamal\b"), "pattern", _fixed("elgamal")),
 ]
 
 # import beats function_call beats string_arg beats pattern when the same

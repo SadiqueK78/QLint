@@ -510,3 +510,65 @@ def test_an_invalid_fail_on_is_rejected_by_the_parser(tmp_path):
     with pytest.raises(SystemExit) as exc:
         run(["--path", str(tmp_path), "--fail-on", "whenever"])
     assert exc.value.code == 2
+
+
+# ---------------------------------------------------------------- cbom format
+
+
+def cbom_of(path):
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_cbom_format_writes_a_cyclonedx_bom(vulnerable_repo, tmp_path):
+    output = tmp_path / "out.cbom.json"
+    exit_code = run(
+        ["--path", str(vulnerable_repo), "--output", str(output), "--format", "cbom"]
+    )
+    cbom = cbom_of(output)
+    assert cbom["bomFormat"] == "CycloneDX"
+    assert cbom["specVersion"] == "1.6"
+    assert cbom["serialNumber"].startswith("urn:uuid:")
+    assert cbom["components"]
+    for component in cbom["components"]:
+        assert component["type"] == "cryptographic-asset"
+    # The format flag changes the artifact, never the pass/fail verdict.
+    assert exit_code == 1
+
+
+def test_cbom_inventories_each_algorithm_once(vulnerable_repo, tmp_path):
+    output = tmp_path / "out.cbom.json"
+    run(
+        ["--path", str(vulnerable_repo), "--output", str(output), "--format", "cbom"]
+    )
+    names = [component["name"] for component in cbom_of(output)["components"]]
+    assert names == sorted(set(names))
+
+
+def test_cbom_output_matches_the_converter_used_by_the_api(vulnerable_repo, tmp_path):
+    """The CLI must not be a divergent code path — same converter, same output."""
+    from cbom_converter import convert_to_cbom
+    from scanner_engine import scan_directory
+
+    output = tmp_path / "out.cbom.json"
+    run(
+        ["--path", str(vulnerable_repo), "--output", str(output), "--format", "cbom"]
+    )
+    written = cbom_of(output)
+    expected = convert_to_cbom(scan_directory(vulnerable_repo))
+    # serialNumber is a fresh UUID per document by design, so compare the rest.
+    written.pop("serialNumber"), expected.pop("serialNumber")
+    written["metadata"].pop("timestamp"), expected["metadata"].pop("timestamp")
+    assert written == expected
+
+
+def test_a_clean_repo_produces_an_empty_inventory(clean_repo, tmp_path):
+    output = tmp_path / "out.cbom.json"
+    assert run(
+        ["--path", str(clean_repo), "--output", str(output), "--format", "cbom"]
+    ) == 0
+    assert cbom_of(output)["components"] == []
+
+
+def test_an_unknown_format_is_rejected_by_the_parser(vulnerable_repo, tmp_path):
+    with pytest.raises(SystemExit):
+        run(["--path", str(vulnerable_repo), "--format", "cyclonedx"])

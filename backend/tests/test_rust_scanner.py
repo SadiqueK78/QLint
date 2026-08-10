@@ -586,3 +586,56 @@ pub fn strong_digest(data: &[u8]) -> Vec<u8> {
         for finding in found:
             assert finding["code_snippet"]
             assert finding["fix_snippet"]
+
+
+class TestElGamal:
+    """Rust has no dominant ElGamal crate, so the whole small field is covered.
+
+    Nearly all of these implement exponential ElGamal over an elliptic-curve
+    group for homomorphic or voting schemes. That variant rests on the
+    elliptic-curve discrete log, so Shor's Algorithm breaks it exactly as it
+    breaks the classic modular construction — it is reported, not excused.
+    """
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "use elastic_elgamal::{Keypair, group::Ristretto};",
+            "use elgamal_ristretto::public::PublicKey;",
+            "use rust_elgamal::{DecryptionKey, GENERATOR_TABLE};",
+            "use jubjub_elgamal::Ciphertext;",
+            "use lnpbp_elgamal::Encrypt;",
+            "use elgamal::ElGamal;",
+        ],
+    )
+    def test_detects_the_elgamal_crates(self, source):
+        found = scan_rust_source(source, "a.rs")
+        assert "ElGamal" in [f["algorithm"] for f in found]
+        assert found[0]["severity"] == "critical"
+        assert found[0]["quantum_vulnerable"] is True
+        assert found[0]["attack_vector"] == "Shor's Algorithm"
+
+    def test_detects_qualified_paths_without_the_use_line(self):
+        source = "let keypair = elastic_elgamal::Keypair::generate(&mut rng);"
+        assert [f["algorithm"] for f in scan_rust_source(source, "a.rs")] == ["ElGamal"]
+
+    def test_detects_type_names(self):
+        assert algorithms("let pk: ElGamalPublicKey = load();") == ["ElGamal"]
+
+    def test_the_longest_crate_name_wins_over_its_prefix(self):
+        # `elgamal` is a prefix of `elgamal_ristretto`; the alternation has to
+        # reach the longer name rather than stopping at the shorter one.
+        found = scan_rust_source("use elgamal_ristretto::ciphertext::Ciphertext;", "a.rs")
+        assert [f["algorithm"] for f in found] == ["ElGamal"]
+
+    def test_elgamal_in_a_comment_or_string_is_not_a_finding(self):
+        source = (
+            "// use elastic_elgamal::Keypair;\n"
+            'let note = "elgamal was removed";\n'
+        )
+        assert scan_rust_source(source, "a.rs") == []
+
+    def test_finding_carries_both_snippets(self):
+        found = scan_rust_source("use elastic_elgamal::Keypair;", "a.rs")
+        assert found[0]["code_snippet"]
+        assert "pqcrypto_mlkem" in found[0]["fix_snippet"]

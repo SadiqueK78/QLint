@@ -251,3 +251,46 @@ export const Signer: React.FC<Props> = ({ payload }) => {
     def test_typescript_type_annotations_do_not_create_false_positives(self):
         source = "let ec: number = 5;\nconst description: string = 'des';\n"
         assert scan_js_source(source, "types.ts") == []
+
+
+class TestElGamal:
+    """JavaScript has no ElGamal library with meaningful adoption.
+
+    node-forge does not implement it; the npm packages that do are dormant
+    (the `elgamal` package was last published in 2016). These rules are exact
+    module specifiers and one OpenPGP.js enum path rather than anything
+    looser, because a broad /elgamal/i would match prose in a crypto library's
+    own source far more often than a real call site.
+    """
+
+    def test_detects_the_elgamal_package_via_require(self):
+        found = scan_js_source("const ElGamal = require('elgamal');", "a.js")
+        assert [f["algorithm"] for f in found] == ["ElGamal"]
+        assert found[0]["severity"] == "critical"
+        assert found[0]["quantum_vulnerable"] is True
+
+    def test_detects_the_elgamal_package_via_import(self):
+        found = scan_js_source("import ElGamal from 'elgamal';", "a.ts")
+        assert [f["algorithm"] for f in found] == ["ElGamal"]
+
+    def test_detects_the_basic_simple_elgamal_package(self):
+        found = scan_js_source('require("basic_simple_elgamal")', "a.js")
+        assert [f["algorithm"] for f in found] == ["ElGamal"]
+
+    def test_detects_the_openpgp_js_public_key_enum(self):
+        source = "if (algorithm === enums.publicKey.elgamal) { reject(); }"
+        assert [f["algorithm"] for f in scan_js_source(source, "a.js")] == ["ElGamal"]
+
+    def test_the_word_elgamal_in_prose_is_not_a_finding(self):
+        # The deliberate limit of the exact-specifier approach: a comment or a
+        # variable name mentioning ElGamal is not a use of it.
+        source = (
+            "// ElGamal support was removed in v3.\n"
+            "const elgamalSupported = false;\n"
+        )
+        assert scan_js_source(source, "a.js") == []
+
+    def test_finding_carries_both_snippets(self):
+        found = scan_js_source("const ElGamal = require('elgamal');", "a.js")
+        assert found[0]["code_snippet"]
+        assert "liboqs-node" in found[0]["fix_snippet"]

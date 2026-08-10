@@ -13,7 +13,7 @@ QLint scans the Python, JavaScript, TypeScript, Go, Java, and Rust code in any p
 - **Auth:** JWT (python-jose) + bcrypt password hashing (passlib)
 - **Frontend:** React 18, Vite
 - **Scanners:** Python `ast` module; context-aware pattern matching for JS/TS/Go/Java/Rust
-- **Output:** SARIF 2.1.0 (GitHub Code Scanning, VS Code) plus the native JSON report
+- **Output:** SARIF 2.1.0 (GitHub Code Scanning, VS Code), CycloneDX 1.6 CBOM, plus the native JSON report
 - **CI:** standalone CLI and a composite GitHub Action, no server or database needed
 - **Standards:** NIST FIPS 203, 204, 205 (2024)
 
@@ -50,6 +50,7 @@ QLint/
 │   ├── rust_scanner.py          # Rust
 │   ├── scanner_engine.py        # orchestration: GitHub repo or local directory
 │   ├── sarif_converter.py       # scan report -> SARIF 2.1.0
+│   ├── cbom_converter.py        # scan report -> CycloneDX 1.6 CBOM
 │   ├── hndl_calculator.py
 │   ├── pqc_benchmark.py         # liboqs benchmarks (optional dependency)
 │   ├── qlint_cli.py             # standalone CI scanner, no server or database
@@ -189,10 +190,12 @@ Expected: all tests pass.
 
 `backend/qlint_cli.py` is a standalone scanner: it walks a directory that is
 already on disk and needs no server, database, credentials, or GitHub API
-calls. It runs the same scanners and emits the same SARIF 2.1.0 as the web app.
+calls. It runs the same scanners and emits the same SARIF 2.1.0 and CycloneDX
+CBOM as the web app.
 
 ```bash
 python backend/qlint_cli.py --path . --output qlint-results.sarif
+python backend/qlint_cli.py --path . --format cbom --output qlint-cbom.json
 python backend/qlint_cli.py --path ./src --format json --fail-on warning
 python backend/qlint_cli.py --path . --exclude "benchmarks/*,vendor/legacy.py"
 ```
@@ -201,7 +204,7 @@ python backend/qlint_cli.py --path . --exclude "benchmarks/*,vendor/legacy.py"
 | ----------- | --------------------- | -------------------------------------------------------- |
 | `--path`    | `.`                   | Directory to scan                                        |
 | `--output`  | `qlint-results.sarif` | Where to write results                                   |
-| `--format`  | `sarif`               | `sarif` (2.1.0) or `json` (the raw report shape)          |
+| `--format`  | `sarif`               | `sarif` (2.1.0), `cbom` (CycloneDX 1.6), or `json` (the raw report shape) |
 | `--exclude` | none                  | Glob patterns to skip; repeatable or comma-separated      |
 | `--fail-on` | `critical`            | Exit 1 on findings at or above this level; `none` never fails |
 
@@ -216,6 +219,75 @@ files are never read — they do not count toward `files scanned`. Matching is
 case-sensitive on every platform, so a pattern behaves the same on a developer's
 machine and on a Linux runner. Use it for code that holds classical algorithms
 on purpose: test fixtures, compatibility shims, benchmark baselines.
+
+## CBOM output
+
+A CBOM (Cryptography Bill of Materials) is CycloneDX's standard inventory of
+the cryptographic assets a codebase contains. QLint emits CycloneDX 1.6, the
+sibling of the SARIF output and built from the same scan.
+
+The two answer different questions. SARIF is "what is wrong and where", one
+result per finding, for GitHub Code Scanning and SARIF viewers. A CBOM is "what
+cryptography is in here", one component per algorithm with every place it was
+seen collected underneath — the artifact a post-quantum migration programme
+tracks progress against.
+
+```bash
+# CLI
+python backend/qlint_cli.py --path . --format cbom --output qlint-cbom.json
+
+# API, anonymous
+curl -X POST "http://localhost:8000/scan?format=cbom" \
+  -H "Content-Type: application/json" \
+  -d '{"repo_url": "https://github.com/owner/repo"}'
+
+# API, a saved scan from your history
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8000/user/scans/<scan_id>/cbom
+```
+
+Each algorithm becomes one `cryptographic-asset` component:
+
+```json
+{
+  "type": "cryptographic-asset",
+  "bom-ref": "crypto/rsa",
+  "name": "RSA",
+  "cryptoProperties": {
+    "assetType": "algorithm",
+    "algorithmProperties": {
+      "primitive": "signature",
+      "executionEnvironment": "software-plain-ram",
+      "implementationPlatform": "generic",
+      "cryptoFunctions": ["keygen", "encrypt", "decrypt", "sign", "verify"],
+      "nistQuantumSecurityLevel": 0
+    }
+  },
+  "evidence": {
+    "occurrences": [
+      { "location": "src/auth.py", "line": 12 },
+      { "location": "src/keys.go", "line": 8 }
+    ]
+  }
+}
+```
+
+`nistQuantumSecurityLevel: 0` is the field that makes the document useful for
+migration tracking: it marks an algorithm as providing no post-quantum
+security, and it is emitted only for the quantum-exposed ones. A quantum-safe
+component (AES-256, SHA-384, ML-KEM) leaves the field off entirely, so counting
+level-0 components across a fleet of CBOMs measures the remaining work.
+
+Two deliberate differences from the SARIF output:
+
+- **The inventory is the scan, not the catalog.** SARIF ships every rule QLint
+  knows about whether this scan hit it or not, because tools cache rule
+  definitions across runs. A CBOM lists only what was found — an inventory
+  naming algorithms the code does not contain would be a false inventory.
+- **Library-level notes are not assets.** "This file imports openssl" is a
+  finding worth reporting in SARIF, but it names no algorithm, so it is not a
+  part a bill of materials can list. An AES usage whose key length the scanner
+  could not read *is* listed, with `parameterSetIdentifier` left off.
 
 ### GitHub Action
 
@@ -510,6 +582,7 @@ Shipped:
 - ~~F17: HNDL (Harvest Now, Decrypt Later) risk calculator~~
 - ~~F18: PQC benchmark lab (liboqs)~~
 - ~~F19: SARIF 2.1.0 output~~
+- ~~CycloneDX 1.6 CBOM output~~
 - ~~F20: Standalone CLI + GitHub Action~~
 - ~~F26: Java scanning~~
 - ~~F27: Rust scanning~~

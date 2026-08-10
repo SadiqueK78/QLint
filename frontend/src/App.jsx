@@ -848,17 +848,27 @@ function downloadReport(result) {
   saveBlob(blob, reportFilename(result, "txt"));
 }
 
-// SARIF is built server-side so the rule catalog and severity mapping stay in
-// one place. A signed-in user's scan has an id to address; an anonymous one
-// does not, so that path asks the scan endpoint to render the cached result
-// as SARIF instead.
-async function downloadSarif(result, authToken) {
+// SARIF and CBOM are both built server-side so the rule catalog, severity
+// mapping and CycloneDX enums stay in one place. A signed-in user's scan has
+// an id to address; an anonymous one does not, so that path asks the scan
+// endpoint to render the cached result in the requested format instead.
+//
+// The two downloads answer different questions and are offered side by side:
+// SARIF is "what is wrong and where", for code scanning tools; the CBOM is the
+// cryptographic inventory a PQC migration programme tracks progress against.
+const EXPORT_FORMATS = {
+  sarif: { path: "sarif", extension: "sarif" },
+  cbom: { path: "cbom", extension: "cbom.json" },
+};
+
+async function downloadExport(result, authToken, format) {
+  const { path, extension } = EXPORT_FORMATS[format];
   const response =
     result.scan_id && authToken
-      ? await fetch(`${API_BASE}/user/scans/${result.scan_id}/sarif`, {
+      ? await fetch(`${API_BASE}/user/scans/${result.scan_id}/${path}`, {
           headers: { Authorization: `Bearer ${authToken}` },
         })
-      : await fetch(`${API_BASE}/scan?format=sarif`, {
+      : await fetch(`${API_BASE}/scan?format=${format}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ repo_url: `https://github.com/${result.repo}` }),
@@ -867,7 +877,7 @@ async function downloadSarif(result, authToken) {
     const body = await response.json().catch(() => null);
     throw new Error(body?.detail || `HTTP ${response.status}`);
   }
-  saveBlob(await response.blob(), reportFilename(result, "sarif"));
+  saveBlob(await response.blob(), reportFilename(result, extension));
 }
 
 // Only the fields the backend actually reads get sent. That includes the
@@ -1433,18 +1443,21 @@ function ResultsView({
     ])
     .filter(([, findings]) => findings.length > 0);
 
-  const [sarifBusy, setSarifBusy] = useState(false);
-  const [sarifError, setSarifError] = useState(null);
+  // One busy flag holding the format being built, rather than one flag per
+  // button: only one export can be in flight at a time, and the error line
+  // below the row belongs to whichever one failed.
+  const [exportBusy, setExportBusy] = useState(null);
+  const [exportError, setExportError] = useState(null);
 
-  const getSarif = async () => {
-    setSarifBusy(true);
-    setSarifError(null);
+  const getExport = (format, label) => async () => {
+    setExportBusy(format);
+    setExportError(null);
     try {
-      await downloadSarif(result, authToken);
+      await downloadExport(result, authToken, format);
     } catch (err) {
-      setSarifError(err.message || "Could not build the SARIF file.");
+      setExportError(err.message || `Could not build the ${label} file.`);
     } finally {
-      setSarifBusy(false);
+      setExportBusy(null);
     }
   };
 
@@ -1485,11 +1498,20 @@ function ResultsView({
             <button
               className="btn-ghost btn-small"
               type="button"
-              onClick={getSarif}
-              disabled={sarifBusy}
+              onClick={getExport("sarif", "SARIF")}
+              disabled={exportBusy !== null}
               title="SARIF 2.1.0, for GitHub Code Scanning and SARIF viewers"
             >
-              {sarifBusy ? "Building SARIF..." : "Download SARIF"}
+              {exportBusy === "sarif" ? "Building SARIF..." : "Download SARIF"}
+            </button>
+            <button
+              className="btn-ghost btn-small"
+              type="button"
+              onClick={getExport("cbom", "CBOM")}
+              disabled={exportBusy !== null}
+              title="CycloneDX 1.6 CBOM: an inventory of the cryptography this repository uses"
+            >
+              {exportBusy === "cbom" ? "Building CBOM..." : "Download CBOM"}
             </button>
             <button
               className="btn-primary btn-small"
@@ -1499,7 +1521,7 @@ function ResultsView({
               Scan Another Repository
             </button>
           </div>
-          {sarifError && <div className="sarif-error">{sarifError}</div>}
+          {exportError && <div className="sarif-error">{exportError}</div>}
         </div>
       </div>
 

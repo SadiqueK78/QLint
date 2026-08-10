@@ -24,6 +24,7 @@ from github_client import (
     get_repo_files,
     parse_repo_url,
 )
+from cbom_converter import convert_to_cbom
 from sarif_converter import convert_to_sarif
 from scanner_engine import ScanCancelled, scan_repository
 
@@ -138,18 +139,31 @@ async def _cache_store(repo_url: str, result: dict, user: dict | None) -> str | 
         return None  # a failed cache write must not fail the scan
 
 
-def _sarif_response(report: dict, repo_url: str) -> JSONResponse:
-    """Render a report as a downloadable SARIF file.
+# The download formats /scan can render instead of the normal report shape,
+# mapped to (converter, file extension). Adding one here is all it takes: the
+# Query pattern, the cached path and the fresh path all read this table.
+_DOWNLOAD_FORMATS = {
+    "sarif": (convert_to_sarif, "sarif"),
+    "cbom": (convert_to_cbom, "cbom.json"),
+}
+_FORMAT_PATTERN = "^(?:sarif|cbom)$"
+
+
+def _download_response(report: dict, repo_url: str, format: str) -> JSONResponse:
+    """Render a report as a downloadable SARIF or CBOM file.
 
     Named after the repo rather than a scan id: this path also serves anonymous
     scans, which are stored without an owner and have no id to hand back.
     """
+    convert, extension = _DOWNLOAD_FORMATS[format]
     slug = repo_url.rstrip("/").rsplit("/", 2)[-2:]
     name = "-".join(part for part in slug if part) or "report"
     return JSONResponse(
-        content=convert_to_sarif(report),
+        content=convert(report),
         headers={
-            "Content-Disposition": f'attachment; filename="qlint-scan-{name}.sarif"'
+            "Content-Disposition": (
+                f'attachment; filename="qlint-scan-{name}.{extension}"'
+            )
         },
     )
 
@@ -161,9 +175,10 @@ async def scan(
     user: dict | None = Depends(get_optional_user),
     format: str | None = Query(
         default=None,
-        pattern="^sarif$",
-        description="Set to 'sarif' to receive SARIF 2.1.0 instead of the "
-        "normal report shape. Cached scans convert without re-scanning.",
+        pattern=_FORMAT_PATTERN,
+        description="Set to 'sarif' for SARIF 2.1.0, or 'cbom' for a "
+        "CycloneDX 1.6 cryptography bill of materials, instead of the normal "
+        "report shape. Cached scans convert without re-scanning.",
     ),
 ):
     token = _resolve_token(body, user)
@@ -173,10 +188,10 @@ async def scan(
         cached = await _cache_lookup(repo_url)
         if cached:
             result = dict(cached["result"])
-            if format == "sarif":
-                # SARIF carries no cache metadata, so return the findings as
-                # they were stored rather than annotating them.
-                return _sarif_response(result, repo_url)
+            if format:
+                # Neither download format carries cache metadata, so return
+                # the findings as they were stored rather than annotating them.
+                return _download_response(result, repo_url, format)
             result["cached"] = True
             result["cached_at"] = _iso(cached["created_at"])
             result["cache_expires_at"] = _iso(cached["expires_at"])
@@ -224,8 +239,8 @@ async def scan(
     report["cached"] = False
 
     scan_id = await _cache_store(repo_url, report, user)
-    if format == "sarif":
-        return _sarif_response(report, repo_url)
+    if format:
+        return _download_response(report, repo_url, format)
     # Anonymous scans are stored without an owner, so their id resolves for
     # nobody; leave it off rather than handing out one that always 404s.
     if scan_id and user:

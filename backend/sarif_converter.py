@@ -117,11 +117,15 @@ def _catalog_rules() -> dict[str, dict]:
     return rules
 
 
-def _iter_findings(scan_report: dict):
+def iter_findings(scan_report: dict):
     """Yield finding dicts from either report shape.
 
     scanner_engine groups findings under findings_by_file; a flat "findings"
     list is also accepted so callers holding a plain list convert cleanly.
+
+    Public because cbom_converter reads the same two report shapes: "the
+    findings of a report" has to mean one thing across both output formats,
+    and a second copy of this walk is how the two would drift apart.
     """
     if not isinstance(scan_report, dict):
         return
@@ -144,12 +148,13 @@ def _iter_findings(scan_report: dict):
                     yield finding if finding.get("file") else {**finding, "file": path}
 
 
-def _uri(value) -> str:
+def artifact_uri(value) -> str:
     """A relative, forward-slashed artifact URI.
 
     SARIF artifact URIs are POSIX-style, so Windows separators are normalized
     and any absolute prefix (drive letter or leading slash) is dropped —
-    Code Scanning matches these against repo-relative paths.
+    Code Scanning matches these against repo-relative paths. CBOM occurrence
+    locations want exactly the same normalization, and share this.
     """
     if not isinstance(value, str) or not value.strip():
         return "unknown"
@@ -238,7 +243,7 @@ def _result(finding: dict, rules: dict[str, dict]) -> dict:
         "locations": [
             {
                 "physicalLocation": {
-                    "artifactLocation": {"uri": _uri(finding.get("file"))},
+                    "artifactLocation": {"uri": artifact_uri(finding.get("file"))},
                     "region": {
                         "startLine": _start_line(finding),
                         "startColumn": _start_column(finding),
@@ -286,7 +291,7 @@ def convert_to_sarif(scan_report: dict) -> dict:
 
     results: list[dict] = []
     try:
-        for finding in _iter_findings(scan_report):
+        for finding in iter_findings(scan_report):
             try:
                 results.append(_result(finding, rules))
             except Exception:

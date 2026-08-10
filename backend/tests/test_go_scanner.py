@@ -357,3 +357,44 @@ func Digest(data []byte) [32]byte {
         # bcrypt must stay out of the report entirely.
         assert not any("crypt" in name.lower() for name in names)
         assert [f["line"] for f in found] == sorted(f["line"] for f in found)
+
+
+class TestElGamal:
+    """Go's stdlib has no ElGamal; the OpenPGP packages are the real surface.
+
+    golang.org/x/crypto/openpgp is frozen and deprecated but vendored into a
+    great many trees, and ProtonMail's fork is what the current PGP tooling
+    (go-git among others) depends on.
+    """
+
+    def test_detects_the_x_crypto_openpgp_import(self):
+        source = 'import "golang.org/x/crypto/openpgp/elgamal"'
+        found = scan_go_source(source, "a.go")
+        assert [f["algorithm"] for f in found] == ["ElGamal"]
+        assert found[0]["severity"] == "critical"
+        assert found[0]["match_type"] == "import"
+        assert found[0]["attack_vector"] == "Shor's Algorithm"
+
+    def test_detects_the_protonmail_fork_import(self):
+        source = 'import "github.com/ProtonMail/go-crypto/openpgp/elgamal"'
+        assert [f["algorithm"] for f in scan_go_source(source, "a.go")] == ["ElGamal"]
+
+    def test_detects_package_qualified_calls(self):
+        source = "c1, c2, err := elgamal.Encrypt(rand.Reader, pub, message)"
+        found = scan_go_source(source, "a.go")
+        assert [f["algorithm"] for f in found] == ["ElGamal"]
+        assert found[0]["match_type"] == "function_call"
+
+    def test_detects_key_types(self):
+        source = "func load() (*elgamal.PrivateKey, error) { return nil, nil }"
+        assert [f["algorithm"] for f in scan_go_source(source, "a.go")] == ["ElGamal"]
+
+    def test_elgamal_in_a_comment_is_not_a_finding(self):
+        source = "// elgamal.Encrypt was removed here\nx := 1\n"
+        assert scan_go_source(source, "a.go") == []
+
+    def test_finding_carries_both_snippets(self):
+        source = 'import "golang.org/x/crypto/openpgp/elgamal"'
+        found = scan_go_source(source, "a.go")
+        assert found[0]["code_snippet"]
+        assert "mlkem768" in found[0]["fix_snippet"]

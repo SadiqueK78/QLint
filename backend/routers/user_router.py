@@ -9,6 +9,7 @@ from pymongo.errors import PyMongoError
 
 from auth import get_current_user, to_object_id
 from database import VISIBLE_SCAN, get_scans
+from cbom_converter import convert_to_cbom
 from sarif_converter import convert_to_sarif
 
 router = APIRouter(prefix="/user")
@@ -96,8 +97,8 @@ async def _owned_scan(scan_id: str, user: dict) -> dict:
     The user_id filter is what keeps one user from reading another's scan: a
     scan owned by someone else is indistinguishable from a missing one. A scan
     the owner has deleted reads the same way -- the document survives for the
-    admin aggregates, but every user-facing route treats it as gone, so /full
-    and /sarif cannot serve content the user asked to remove from their view.
+    admin aggregates, but every user-facing route treats it as gone, so /full,
+    /sarif and /cbom cannot serve content the user asked to remove from view.
     """
     object_id = to_object_id(scan_id)
     if object_id is None:
@@ -136,6 +137,29 @@ async def get_scan_sarif(scan_id: str, user: dict = Depends(get_current_user)):
         headers={
             "Content-Disposition": (
                 f'attachment; filename="qlint-scan-{scan_id}.sarif"'
+            )
+        },
+    )
+
+
+@router.get("/scans/{scan_id}/cbom")
+async def get_scan_cbom(scan_id: str, user: dict = Depends(get_current_user)):
+    """The same report as /full, rendered as a CycloneDX 1.6 CBOM.
+
+    The sibling of /sarif, and gated by the same ownership check. Where SARIF
+    answers "what is wrong and where", the CBOM is the cryptographic inventory
+    a migration programme tracks progress against.
+
+    Served as a download so a browser hitting this URL saves the file rather
+    than rendering the JSON inline.
+    """
+    entry = await _owned_scan(scan_id, user)
+    cbom = convert_to_cbom(entry.get("result") or {})
+    return JSONResponse(
+        content=cbom,
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="qlint-scan-{scan_id}.cbom.json"'
             )
         },
     )
