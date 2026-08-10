@@ -1404,6 +1404,8 @@ function ResultsView({
   result,
   activeFilter,
   setActiveFilter,
+  activeAlgo,
+  setActiveAlgo,
   expandedFiles,
   setExpandedFiles,
   expandedFixes,
@@ -1426,22 +1428,40 @@ function ResultsView({
     }
   }
 
-  const tabCounts = {
-    all: result.total_findings,
-    critical: result.severity_summary.critical,
-    warning: result.severity_summary.warning,
-    safe: result.severity_summary.safe,
-    info: result.severity_summary.info,
-  };
+  // With an algorithm pill active the tab numbers have to be recounted from
+  // the findings themselves, otherwise the tabs would keep advertising the
+  // repository-wide totals while the list below shows a subset.
+  const tabCounts = activeAlgo
+    ? allFindings.reduce(
+        (counts, f) => {
+          if (f.algorithm !== activeAlgo) return counts;
+          counts.all += 1;
+          counts[f.severity] += 1;
+          return counts;
+        },
+        { all: 0, critical: 0, warning: 0, safe: 0, info: 0 }
+      )
+    : {
+        all: result.total_findings,
+        critical: result.severity_summary.critical,
+        warning: result.severity_summary.warning,
+        safe: result.severity_summary.safe,
+        info: result.severity_summary.info,
+      };
+
+  // Severity tab and algorithm pill are two independent dimensions and both
+  // narrow the same list; a file left with nothing to show drops out rather
+  // than rendering as an empty expandable row.
+  const matchesFilters = (f) =>
+    (activeFilter === "all" || f.severity === activeFilter) &&
+    (activeAlgo === null || f.algorithm === activeAlgo);
 
   const visibleFiles = Object.entries(result.findings_by_file)
-    .map(([file, findings]) => [
-      file,
-      activeFilter === "all"
-        ? findings
-        : findings.filter((f) => f.severity === activeFilter),
-    ])
+    .map(([file, findings]) => [file, findings.filter(matchesFilters)])
     .filter(([, findings]) => findings.length > 0);
+
+  const toggleAlgo = (algo) =>
+    setActiveAlgo((prev) => (prev === algo ? null : algo));
 
   // One busy flag holding the format being built, rather than one flag per
   // button: only one export can be in flight at a time, and the error line
@@ -1545,16 +1565,44 @@ function ResultsView({
 
       {result.algorithms_found.length > 0 && (
         <>
-          <div className="algo-label">Algorithms Detected</div>
-          <div className="algo-row">
-            {result.algorithms_found.map((algo) => (
-              <span
-                className={`algo-pill pill-${algoSeverity[algo] ?? "info"}`}
-                key={algo}
+          <div className="algo-label-row">
+            <span className="algo-label">Algorithms Detected</span>
+            {activeAlgo !== null && (
+              <button
+                type="button"
+                className="algo-clear-btn"
+                onClick={() => setActiveAlgo(null)}
+                title={`Clear the ${activeAlgo} filter and show every algorithm`}
               >
-                {algo}
-              </span>
-            ))}
+                <span className="algo-clear-x" aria-hidden="true">
+                  &times;
+                </span>
+                Clear filter
+              </button>
+            )}
+          </div>
+          <div className="algo-row">
+            {result.algorithms_found.map((algo) => {
+              const active = activeAlgo === algo;
+              return (
+                <button
+                  type="button"
+                  className={`algo-pill algo-pill-btn pill-${
+                    algoSeverity[algo] ?? "info"
+                  }${active ? " algo-pill-active" : ""}`}
+                  key={algo}
+                  onClick={() => toggleAlgo(algo)}
+                  aria-pressed={active}
+                  title={
+                    active
+                      ? `Clear the ${algo} filter`
+                      : `Show only ${algo} findings`
+                  }
+                >
+                  {algo}
+                </button>
+              );
+            })}
           </div>
         </>
       )}
@@ -1586,7 +1634,10 @@ function ResultsView({
           </div>
 
           {visibleFiles.length === 0 ? (
-            <div className="no-findings">No {activeFilter} findings.</div>
+            <div className="no-findings">
+              No {activeFilter === "all" ? "" : `${activeFilter} `}
+              {activeAlgo ? `${activeAlgo} ` : ""}findings.
+            </div>
           ) : (
             visibleFiles.map(([file, findings]) => {
               const expanded = !!expandedFiles[file];
@@ -2142,6 +2193,10 @@ export default function App() {
   const [rateLimit, setRateLimit] = useState(null);
   const [statusFailed, setStatusFailed] = useState(false);
   const [activeFilter, setActiveFilter] = useState("all");
+  // Algorithm filter, applied on top of the severity tab. null means "any
+  // algorithm"; it lives here rather than in ResultsView so it survives the
+  // same resets as the severity tab.
+  const [activeAlgo, setActiveAlgo] = useState(null);
   const [expandedFiles, setExpandedFiles] = useState({});
   const [expandedFixes, setExpandedFixes] = useState({});
   const [urlError, setUrlError] = useState(null);
@@ -2414,6 +2469,7 @@ export default function App() {
       setExpandedFiles({});
       setExpandedFixes({});
       setActiveFilter("all");
+      setActiveAlgo(null);
       setView("results");
       setShowHistory(false);
     } catch {
@@ -2568,6 +2624,7 @@ export default function App() {
       setExpandedFiles({});
       setExpandedFixes({});
       setActiveFilter("all");
+      setActiveAlgo(null);
       setView("results");
       // The backend only counts scans it actually ran, so mirror that here
       // instead of refetching /auth/me for a single number.
@@ -2618,6 +2675,7 @@ export default function App() {
     setTokenVisible(false);
     setScanResult(null);
     setActiveFilter("all");
+    setActiveAlgo(null);
     setExpandedFiles({});
     setExpandedFixes({});
     setError(null);
@@ -2697,6 +2755,8 @@ export default function App() {
               result={scanResult}
               activeFilter={activeFilter}
               setActiveFilter={setActiveFilter}
+              activeAlgo={activeAlgo}
+              setActiveAlgo={setActiveAlgo}
               expandedFiles={expandedFiles}
               setExpandedFiles={setExpandedFiles}
               expandedFixes={expandedFixes}

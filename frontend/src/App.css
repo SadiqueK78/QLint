@@ -949,6 +949,51 @@ input {
   margin-bottom: 10px;
 }
 
+/* The label shares its line with the clear control, so the row owns the
+   spacing below the heading rather than the label itself. */
+.algo-label-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.algo-label-row .algo-label {
+  margin-bottom: 0;
+}
+
+/* Escape hatch out of an active algorithm filter: clicking the lit pill
+   again also clears it, but nothing on screen says so. Rendered only while
+   a filter is active, borrowing the muted-outline look of .rescan-btn and
+   the pill radius of the badges it sits above. */
+.algo-clear-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  padding: 3px 10px;
+  border-radius: 100px;
+  cursor: pointer;
+}
+
+.algo-clear-btn:hover {
+  background: var(--bg);
+  color: var(--text-primary);
+  border-color: var(--text-muted);
+}
+
+.algo-clear-x {
+  font-size: 14px;
+  line-height: 1;
+}
+
 .algo-row {
   display: flex;
   flex-wrap: wrap;
@@ -985,6 +1030,54 @@ input {
   background: var(--info-bg);
   color: var(--info);
   border: 1px solid var(--info-border);
+}
+
+/* Clickable variant of the pill, used on the results page where each
+   algorithm doubles as a filter. The history list keeps the plain span. */
+.algo-pill-btn {
+  cursor: pointer;
+  line-height: 1.45;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease,
+    border-color 0.12s ease,
+    box-shadow 0.12s ease;
+}
+
+.algo-pill-btn:hover {
+  border-color: currentColor;
+}
+
+/* Active filter: the outline pill flips to a solid fill in its own severity
+   colour, matching how the severity tabs mark the selected one. */
+.algo-pill-active,
+.algo-pill-active:hover {
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.algo-pill-active.pill-critical {
+  background: var(--critical);
+  border-color: var(--critical);
+  box-shadow: 0 0 0 3px var(--critical-bg);
+}
+
+.algo-pill-active.pill-warning {
+  background: var(--warning);
+  border-color: var(--warning);
+  box-shadow: 0 0 0 3px var(--warning-bg);
+}
+
+.algo-pill-active.pill-safe {
+  background: var(--safe);
+  border-color: var(--safe);
+  box-shadow: 0 0 0 3px var(--safe-bg);
+}
+
+.algo-pill-active.pill-info {
+  background: var(--info);
+  border-color: var(--info);
+  box-shadow: 0 0 0 3px var(--info-bg);
 }
 
 /* tabs */
@@ -2193,6 +2286,37 @@ input {
   background: #1a0e00;
   color: #ffb347;
   border-color: #3a2000;
+}
+
+/* Active algorithm filter in dark mode: same flip to a solid fill, but the
+   accent becomes the background and the text goes dark to stay readable. */
+[data-theme="dark"] .algo-pill-active,
+[data-theme="dark"] .algo-pill-active:hover {
+  color: #0a0a0a;
+}
+
+[data-theme="dark"] .algo-pill-active.pill-critical {
+  background: #ff6b6b;
+  border-color: #ff6b6b;
+  box-shadow: 0 0 0 3px #3a0000;
+}
+
+[data-theme="dark"] .algo-pill-active.pill-warning {
+  background: #ffb347;
+  border-color: #ffb347;
+  box-shadow: 0 0 0 3px #3a2000;
+}
+
+[data-theme="dark"] .algo-pill-active.pill-safe {
+  background: #00ff41;
+  border-color: #00ff41;
+  box-shadow: 0 0 0 3px #003300;
+}
+
+[data-theme="dark"] .algo-pill-active.pill-info {
+  background: #60a5fa;
+  border-color: #60a5fa;
+  box-shadow: 0 0 0 3px #0b1f3a;
 }
 
 [data-theme="dark"] input,
