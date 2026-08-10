@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from pymongo.errors import PyMongoError
 
 from auth import get_current_user, to_object_id
-from database import get_scans
+from database import VISIBLE_SCAN, get_scans
 from hndl_calculator import (
     CRQC_SCENARIOS,
     DATA_SENSITIVITY_PROFILES,
@@ -40,8 +40,10 @@ async def calculate(body: HNDLRequest, user: dict = Depends(get_current_user)):
     try:
         # The user_id filter is what stops one user scoring another's scan;
         # a scan owned by someone else is indistinguishable from a missing one.
+        # VISIBLE_SCAN gives a scan its owner deleted the same treatment: this
+        # is a user-facing read, so a hidden scan is not scoreable either.
         entry = await get_scans().find_one(
-            {"_id": object_id, "user_id": str(user["_id"])}
+            {"_id": object_id, "user_id": str(user["_id"]), **VISIBLE_SCAN}
         )
     except PyMongoError as exc:
         raise HTTPException(status_code=503, detail=DB_UNAVAILABLE) from exc

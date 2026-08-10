@@ -119,6 +119,24 @@ class TestScanRepository:
         # The Go fix snippet, not the Python one, reaches the report.
         assert "mlkem768" in finding["fix_snippet"]
 
+    def test_java_file_is_scanned_with_the_java_scanner(
+        self, monkeypatch, mock_rate_limit_response
+    ):
+        contents = {
+            "src/main/java/Keys.java": (
+                'KeyPairGenerator kpg = KeyPairGenerator.getInstance("RSA");\n'
+            )
+        }
+        report = run_scan(monkeypatch, contents, mock_rate_limit_response)
+        assert "RSA" in report["algorithms_found"]
+        assert report["languages_scanned"] == ["java"]
+        finding = report["findings_by_file"]["src/main/java/Keys.java"][0]
+        assert finding["language"] == "java"
+        # The Java fix snippet, not the Python one, reaches the report.
+        assert "BouncyCastlePQCProvider" in finding["fix_snippet"]
+        # Both halves the AI explain and patch endpoints require.
+        assert finding["code_snippet"]
+
     def test_mixed_language_repo_reports_every_language(
         self, monkeypatch, sample_rsa_source, mock_rate_limit_response
     ):
@@ -209,9 +227,34 @@ class TestScanDirectory:
         (tmp_path / "d.go").write_text(
             "priv, _ := rsa.GenerateKey(rand.Reader, 2048)", encoding="utf-8"
         )
+        (tmp_path / "E.java").write_text(
+            'Cipher c = Cipher.getInstance("RSA");', encoding="utf-8"
+        )
         report = scan_directory(tmp_path)
-        assert report["scanned_files"] == 4
-        assert report["languages_scanned"] == ["go", "javascript", "python", "typescript"]
+        assert report["scanned_files"] == 5
+        assert report["languages_scanned"] == [
+            "go",
+            "java",
+            "javascript",
+            "python",
+            "typescript",
+        ]
+
+    def test_java_file_is_scanned_with_the_java_scanner(self, tmp_path):
+        """The CLI path routes Java too, not just the GitHub path."""
+        source = tmp_path / "src" / "main" / "java"
+        source.mkdir(parents=True)
+        (source / "Keys.java").write_text(
+            'MessageDigest md = MessageDigest.getInstance("MD5");\n',
+            encoding="utf-8",
+        )
+        report = scan_directory(tmp_path)
+        assert report["languages_scanned"] == ["java"]
+        assert "MD5" in report["algorithms_found"]
+        finding = report["findings_by_file"]["src/main/java/Keys.java"][0]
+        assert finding["language"] == "java"
+        assert finding["code_snippet"]
+        assert "SHA3-512" in finding["fix_snippet"]
 
     def test_unsupported_extensions_are_ignored(self, tmp_path):
         (tmp_path / "notes.md").write_text("rsa.generate_private_key()", encoding="utf-8")

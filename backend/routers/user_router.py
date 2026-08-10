@@ -8,7 +8,7 @@ from pymongo import DESCENDING
 from pymongo.errors import PyMongoError
 
 from auth import get_current_user, to_object_id
-from database import get_scans
+from database import VISIBLE_SCAN, get_scans
 from sarif_converter import convert_to_sarif
 
 router = APIRouter(prefix="/user")
@@ -65,7 +65,10 @@ async def list_scans(
     limit: int = Query(default=10, ge=1, le=50),
 ):
     scans = get_scans()
-    query = {"user_id": str(user["_id"])}
+    # VISIBLE_SCAN drops the scans this user has hidden. `total` is therefore
+    # the size of the list being paginated, not the account's lifetime scan
+    # count -- the two diverge as soon as anything is deleted.
+    query = {"user_id": str(user["_id"]), **VISIBLE_SCAN}
     try:
         total = await scans.count_documents(query)
         cursor = (
@@ -88,17 +91,20 @@ async def list_scans(
 
 
 async def _owned_scan(scan_id: str, user: dict) -> dict:
-    """Fetch a scan the caller owns, or 404.
+    """Fetch a scan the caller owns and has not hidden, or 404.
 
     The user_id filter is what keeps one user from reading another's scan: a
-    scan owned by someone else is indistinguishable from a missing one.
+    scan owned by someone else is indistinguishable from a missing one. A scan
+    the owner has deleted reads the same way -- the document survives for the
+    admin aggregates, but every user-facing route treats it as gone, so /full
+    and /sarif cannot serve content the user asked to remove from their view.
     """
     object_id = to_object_id(scan_id)
     if object_id is None:
         raise HTTPException(status_code=404, detail="Scan not found")
     try:
         entry = await get_scans().find_one(
-            {"_id": object_id, "user_id": str(user["_id"])}
+            {"_id": object_id, "user_id": str(user["_id"]), **VISIBLE_SCAN}
         )
     except PyMongoError as exc:
         raise HTTPException(status_code=503, detail=DB_UNAVAILABLE) from exc
@@ -137,16 +143,36 @@ async def get_scan_sarif(scan_id: str, user: dict = Depends(get_current_user)):
 
 @router.delete("/scans/{scan_id}")
 async def delete_scan(scan_id: str, user: dict = Depends(get_current_user)):
+    """Hide a scan from the caller's history. The document is kept.
+
+    A soft delete, on purpose: this collection is also what /admin/stats and
+    /admin/scans count, so removing the document would let any user silently
+    reduce the operator's view of total usage. The scan stops existing for its
+    owner -- it leaves their list and can no longer be opened, exported, or
+    scored -- while the record of the run survives for the aggregates.
+
+    Purging data for real is deliberately not reachable from here. If erasure
+    is ever needed (a GDPR request, say), it belongs in an explicit admin-only
+    route, not behind a user's tidy-up button.
+    """
     object_id = to_object_id(scan_id)
     if object_id is None:
         raise HTTPException(status_code=404, detail="Scan not found")
     try:
-        # The user_id filter is what keeps one user from deleting another's scan.
-        result = await get_scans().delete_one(
-            {"_id": object_id, "user_id": str(user["_id"])}
+        # user_id keeps one user from deleting another's scan; VISIBLE_SCAN
+        # makes a second delete a 404 rather than quietly rewriting the
+        # timestamp on a scan that was already hidden.
+        result = await get_scans().update_one(
+            {"_id": object_id, "user_id": str(user["_id"]), **VISIBLE_SCAN},
+            {
+                "$set": {
+                    "deleted_at": datetime.now(timezone.utc),
+                    "deleted_by_user": True,
+                }
+            },
         )
     except PyMongoError as exc:
         raise HTTPException(status_code=503, detail=DB_UNAVAILABLE) from exc
-    if result.deleted_count == 0:
+    if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Scan not found")
     return {"deleted": True}

@@ -431,12 +431,15 @@ class TestPromptIsGroundedInRealScannerOutput:
 
     def test_every_scanner_emits_the_two_fields_a_patch_needs(self):
         from go_scanner import scan_go_source
+        from java_scanner import scan_java_source
 
         go_source = 'package main\n\nimport "crypto/rsa"\n'
+        java_source = 'Cipher c = Cipher.getInstance("RSA");\n'
         for findings in (
             scan_python_source(VULNERABLE_PYTHON, "a.py"),
             scan_js_source(VULNERABLE_JS, "a.js"),
             scan_go_source(go_source, "a.go"),
+            scan_java_source(java_source, "A.java"),
         ):
             assert findings
             for finding in findings:

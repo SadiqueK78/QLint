@@ -21,6 +21,21 @@ load_dotenv()
 MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
 DB_NAME = "qlint"
 
+# The filter every user-facing read of the scans collection applies.
+#
+# A user's delete button hides a scan from their own history; it never removes
+# the document. /admin/stats, /admin/users and /admin/scans aggregate this same
+# collection, so a hard delete would let any user quietly shrink the operator's
+# view of total usage -- which is the whole point of admin oversight. Erasing
+# data for real is a separate, deliberate admin action, not a side effect of a
+# user tidying up their list.
+#
+# Matching on null rather than {"$exists": False} is deliberate: in MongoDB a
+# null equality match also matches documents where the field is absent, so
+# every scan stored before soft delete existed stays visible without a
+# migration.
+VISIBLE_SCAN: dict = {"deleted_at": None}
+
 _client: AsyncIOMotorClient | None = None
 _db: AsyncIOMotorDatabase | None = None
 
@@ -70,6 +85,17 @@ async def create_indexes() -> None:
     specs = [
         (db.users, [("email", ASCENDING)], {"unique": True}),
         (db.scans, [("user_id", ASCENDING)], {}),
+        # A user's history page: their scans, minus the ones they have hidden,
+        # newest first.
+        (
+            db.scans,
+            [
+                ("user_id", ASCENDING),
+                ("deleted_at", ASCENDING),
+                ("created_at", DESCENDING),
+            ],
+            {},
+        ),
         (db.scans, [("repo_url", ASCENDING)], {}),
         (db.scans, [("created_at", DESCENDING)], {}),
         # Cache lookup: newest non-expired scan for a repo.

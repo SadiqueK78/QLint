@@ -56,6 +56,8 @@ class TestLanguageForPath:
             ("types/index.d.ts", "typescript"),
             ("SRC/AUTH.JS", "javascript"),
             ("cmd/main.go", "go"),
+            ("src/main/java/com/example/Signer.java", "java"),
+            ("SRC/MAIN/JAVA/KEYS.JAVA", "java"),
         ],
     )
     def test_supported_extensions(self, path, language):
@@ -77,6 +79,7 @@ class TestGetRepoFiles:
                 {"type": "blob", "path": "src/auth.js"},
                 {"type": "blob", "path": "src/Component.tsx"},
                 {"type": "blob", "path": "main.go"},
+                {"type": "blob", "path": "src/main/java/Keys.java"},
                 {"type": "blob", "path": "README.md"},
                 {"type": "blob", "path": "go.mod"},
                 {"type": "tree", "path": "src"},
@@ -98,6 +101,7 @@ class TestGetRepoFiles:
             {"path": "src/auth.js", "language": "javascript"},
             {"path": "src/Component.tsx", "language": "typescript"},
             {"path": "main.go", "language": "go"},
+            {"path": "src/main/java/Keys.java", "language": "java"},
         ]
 
 

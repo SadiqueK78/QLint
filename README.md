@@ -4,7 +4,7 @@ Scan GitHub repositories for quantum-vulnerable cryptographic algorithms and get
 
 ## What it does
 
-QLint scans the Python, JavaScript, TypeScript, and Go code in any public GitHub repository and detects cryptographic algorithms that will be broken (RSA, ECC, DSA, Diffie-Hellman) or weakened (AES-128, SHA-256) by quantum computers. Python detection is AST-based — it parses real syntax trees instead of grepping text, so algorithm names in comments or strings never produce false positives. JavaScript and TypeScript have no stdlib parser to lean on, so they are scanned with context-aware patterns that strip comments and string noise before matching. Every finding comes with a severity rating, the quantum attack vector, and a ready-to-use fix snippet showing the migration to the NIST-standardized post-quantum replacement (ML-KEM, ML-DSA, SLH-DSA). Any finding can also be explained in plain English or turned into a copy-paste unified diff, both generated against your actual code. The whole repository is summarized into a PQC readiness score from 0 to 100.
+QLint scans the Python, JavaScript, TypeScript, Go, and Java code in any public GitHub repository and detects cryptographic algorithms that will be broken (RSA, ECC, DSA, Diffie-Hellman) or weakened (AES-128, SHA-256) by quantum computers. Python detection is AST-based — it parses real syntax trees instead of grepping text, so algorithm names in comments or strings never produce false positives. JavaScript and TypeScript have no stdlib parser to lean on, so they are scanned with context-aware patterns that strip comments and string noise before matching. Every finding comes with a severity rating, the quantum attack vector, and a ready-to-use fix snippet showing the migration to the NIST-standardized post-quantum replacement (ML-KEM, ML-DSA, SLH-DSA). Any finding can also be explained in plain English or turned into a copy-paste unified diff, both generated against your actual code. The whole repository is summarized into a PQC readiness score from 0 to 100.
 
 ## Tech Stack
 
@@ -12,7 +12,7 @@ QLint scans the Python, JavaScript, TypeScript, and Go code in any public GitHub
 - **Database:** MongoDB (Motor async driver)
 - **Auth:** JWT (python-jose) + bcrypt password hashing (passlib)
 - **Frontend:** React 18, Vite
-- **Scanners:** Python `ast` module; context-aware pattern matching for JS/TS/Go
+- **Scanners:** Python `ast` module; context-aware pattern matching for JS/TS/Go/Java
 - **Output:** SARIF 2.1.0 (GitHub Code Scanning, VS Code) plus the native JSON report
 - **CI:** standalone CLI and a composite GitHub Action, no server or database needed
 - **Standards:** NIST FIPS 203, 204, 205 (2024)
@@ -46,6 +46,7 @@ QLint/
 │   ├── ast_scanner.py           # Python (AST)
 │   ├── js_scanner.py            # JavaScript / TypeScript
 │   ├── go_scanner.py            # Go
+│   ├── java_scanner.py          # Java
 │   ├── scanner_engine.py        # orchestration: GitHub repo or local directory
 │   ├── sarif_converter.py       # scan report -> SARIF 2.1.0
 │   ├── hndl_calculator.py
@@ -474,7 +475,7 @@ share one entry.
 | JavaScript | Available   | `.js`, `.jsx`    | Context-aware pattern matching     |
 | TypeScript | Available   | `.ts`, `.tsx`    | Context-aware pattern matching     |
 | Go         | Available   | `.go`            | Context-aware pattern matching     |
-| Java       | Coming Soon | —                | —                                  |
+| Java       | Available   | `.java`          | Context-aware pattern matching     |
 | Rust       | Coming Soon | —                | —                                  |
 
 A scan report lists every language it touched under `languages_scanned`, and
@@ -509,13 +510,14 @@ Shipped:
 - ~~F18: PQC benchmark lab (liboqs)~~
 - ~~F19: SARIF 2.1.0 output~~
 - ~~F20: Standalone CLI + GitHub Action~~
+- ~~F26: Java scanning~~
 
 Planned:
 
 - F10: Team workspaces
 - F14: Stripe integration
 - F15: AI context-aware patches
-- Java and Rust scanners
+- Rust scanner
 
 ## License
 

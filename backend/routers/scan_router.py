@@ -25,12 +25,18 @@ from github_client import (
     parse_repo_url,
 )
 from sarif_converter import convert_to_sarif
-from scanner_engine import scan_repository
+from scanner_engine import ScanCancelled, scan_repository
 
 load_dotenv()
 
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 SCAN_CACHE_TTL_HOURS = int(os.getenv("SCAN_CACHE_TTL_HOURS", "24"))
+
+# nginx's "client closed request". Nobody reads this status -- by definition
+# the socket is gone -- but it keeps an abandoned scan out of the 2xx and 5xx
+# buckets in any access log, where it would otherwise read as either a
+# successful scan or a server fault.
+CLIENT_CLOSED_REQUEST = 499
 
 router = APIRouter()
 
@@ -176,15 +182,44 @@ async def scan(
             result["cache_expires_at"] = _iso(cached["expires_at"])
             # The cache is shared across users, so only hand back the scan id
             # when this user owns the entry — /hndl/calculate and the history
-            # routes will not resolve someone else's id anyway.
-            if user and cached.get("user_id") == str(user["_id"]):
+            # routes will not resolve someone else's id anyway. An entry the
+            # owner has deleted is skipped for the same reason: its result is
+            # still a valid cache hit, but handing back the id would put a scan
+            # they hid back in front of them behind a link that 404s.
+            if (
+                user
+                and cached.get("user_id") == str(user["_id"])
+                and cached.get("deleted_at") is None
+            ):
                 result["scan_id"] = str(cached["_id"])
             return result
 
     start = time.perf_counter()
-    report = await _github_call(
-        scan_repository(body.repo_url, token, request.app.state.github)
-    )
+    try:
+        # Starlette does not cancel this handler when the client goes away, so
+        # without a check the scan runs to completion and stores a result
+        # nobody asked for any more -- measured, not assumed. is_disconnected()
+        # polls the ASGI receive channel for the http.disconnect uvicorn posts
+        # when the socket closes, which covers all three ways a client leaves:
+        # the Cancel button's AbortController, a closed tab, and a navigation.
+        report = await _github_call(
+            scan_repository(
+                body.repo_url,
+                token,
+                request.app.state.github,
+                should_cancel=request.is_disconnected,
+            )
+        )
+    except ScanCancelled:
+        # No cleanup to do, and that is by design rather than luck:
+        # _cache_store below is the only writer on this path, and it runs after
+        # scan_repository returns. Leaving by exception means the insert never
+        # happens, so an abandoned scan leaves no document behind at all --
+        # there is no partial state for a later scan to trip over.
+        return JSONResponse(
+            status_code=CLIENT_CLOSED_REQUEST,
+            content={"detail": "Scan cancelled by the client"},
+        )
     report["scan_duration_seconds"] = round(time.perf_counter() - start, 2)
     report["cached"] = False
 

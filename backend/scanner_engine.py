@@ -13,7 +13,7 @@ import asyncio
 import os
 from fnmatch import fnmatchcase
 from pathlib import Path, PurePosixPath
-from typing import Iterable
+from typing import Awaitable, Callable, Iterable
 
 import httpx
 from fastapi import HTTPException
@@ -29,17 +29,72 @@ from github_client import (
     parse_repo_url,
 )
 from go_scanner import scan_go_source
+from java_scanner import scan_java_source
 from js_scanner import scan_js_source
 from vulnerability_db import get_severity_score
 
 MAX_CONCURRENT_FETCHES = 10
 MIN_RATE_LIMIT = 100
 
+# How many files pass between cancellation checks during the fetch phase. The
+# check itself is cheap but not free -- on the API path it reads the ASGI
+# receive channel -- and a large repo carries thousands of files, so polling on
+# every one buys precision nobody can perceive. At ten files it lands within a
+# fraction of a second of the abort on any repo worth cancelling.
+CANCEL_CHECK_EVERY_FILES = 10
+
+
+class ScanCancelled(Exception):
+    """Raised when the caller asked to stop before the report was finished.
+
+    Deliberately not an HTTPException: scanner_engine has no opinion on how a
+    cancelled scan should be answered over HTTP, and the CLI path uses this
+    module too. The API layer maps it.
+    """
+
+
+class _CancelWatch:
+    """Rate-limited view of a `should_cancel` callback.
+
+    Polls at most once every `every` calls, and latches once it has seen a
+    cancel -- a caller that has gone away cannot come back, so there is nothing
+    to learn from asking twice.
+    """
+
+    def __init__(
+        self,
+        should_cancel: Callable[[], Awaitable[bool]] | None,
+        every: int = CANCEL_CHECK_EVERY_FILES,
+    ) -> None:
+        self._should_cancel = should_cancel
+        self._every = max(1, every)
+        self._since_check = 0
+        self.cancelled = False
+        self.polls = 0
+
+    async def check(self, force: bool = False) -> bool:
+        """Whether to stop, asking the callback only when due (or forced)."""
+        if self.cancelled or self._should_cancel is None:
+            return self.cancelled
+        self._since_check += 1
+        if not force and self._since_check < self._every:
+            return False
+        self._since_check = 0
+        self.polls += 1
+        self.cancelled = bool(await self._should_cancel())
+        return self.cancelled
+
+# Both entry points route through this one table: scan_repository tags each
+# file with language_for_path via github_client, scan_directory does the same
+# through iter_source_files, and both hand the result to scan_source. A
+# language added here is therefore live on the API path and the CLI path at
+# once — there is no second place to register it.
 SCANNERS = {
     "python": scan_python_source,
     "javascript": scan_js_source,
     "typescript": scan_js_source,
     "go": scan_go_source,
+    "java": scan_java_source,
 }
 
 # Directories with no first-party source in them. Walking a real checkout
@@ -248,15 +303,26 @@ def scan_directory(
 
 
 async def scan_repository(
-    repo_url: str, token: str, client: httpx.AsyncClient
+    repo_url: str,
+    token: str,
+    client: httpx.AsyncClient,
+    should_cancel: Callable[[], Awaitable[bool]] | None = None,
 ) -> dict:
     """Scan every .py file in a GitHub repo and build the full PQC report.
 
     Raises HTTPException 429 when the GitHub rate limit is nearly exhausted;
     propagates github_client errors (RepoNotFoundError, InvalidTokenError, ...)
     for the API layer to map. Individual file failures are skipped, never fatal.
+
+    should_cancel is polled periodically while files are being fetched; when it
+    returns True the scan stops issuing GitHub requests and raises
+    ScanCancelled instead of returning a report. It is optional so the CLI and
+    the tests can call this exactly as before; without it the scan can only end
+    by finishing. Passing one costs nothing on the happy path -- a scan that is
+    never cancelled just answers False a few times.
     """
     owner, repo = parse_repo_url(repo_url)
+    watch = _CancelWatch(should_cancel)
 
     rate = await check_rate_limit(token, client=client)
     if rate["remaining"] < MIN_RATE_LIMIT:
@@ -273,10 +339,23 @@ async def scan_repository(
         for entry in await get_repo_files(repo_url, token, client=client)
     ]
 
+    # Listing the tree is one of the slowest steps on a large repo, so ask once
+    # before spending any per-file quota rather than waiting for the first
+    # scheduled check.
+    if await watch.check(force=True):
+        raise ScanCancelled(f"{owner}/{repo}: cancelled before fetching any file")
+
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_FETCHES)
 
     async def fetch(file: dict[str, str]) -> tuple[dict[str, str], str | None]:
         async with semaphore:
+            # Inside the semaphore, so this runs as each file reaches the front
+            # of the queue rather than when the coroutines were created. That
+            # is what makes a cancel take effect: the ten fetches already in
+            # flight finish, and every file still queued behind them returns
+            # here without touching the network.
+            if await watch.check():
+                return file, None
             try:
                 content = await get_file_content(
                     owner, repo, file["path"], token, client=client
@@ -286,6 +365,12 @@ async def scan_repository(
             return file, content
 
     results = await asyncio.gather(*(fetch(file) for file in repo_files))
+
+    # Raised before build_report rather than inside fetch: a cancelled scan
+    # must not produce a report at all, and a half-filled one is worse than
+    # none. The caller gets an exception, never a short report it might store.
+    if watch.cancelled:
+        raise ScanCancelled(f"{owner}/{repo}: cancelled during the file fetch")
 
     final_rate = await check_rate_limit(token, client=client)
 

@@ -36,6 +36,7 @@ EXTENSION_LANGUAGES: dict[str, str] = {
     ".ts": "typescript",
     ".tsx": "typescript",
     ".go": "go",
+    ".java": "java",
 }
 
 

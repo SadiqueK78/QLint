@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import "./App.css";
 import PqcBenchmark from "./PqcBenchmark";
 import About from "./About";
@@ -720,7 +720,12 @@ const LANGUAGES = [
     extensions: ".go",
     detail: "crypto/* imports, tls.Config, and key generation",
   },
-  { name: "Java", status: "soon", extensions: ".java", detail: "In development" },
+  {
+    name: "Java",
+    status: "active",
+    extensions: ".java",
+    detail: "JCA/JCE getInstance calls and Bouncy Castle classes",
+  },
   { name: "Rust", status: "soon", extensions: ".rs", detail: "In development" },
 ];
 
@@ -756,7 +761,7 @@ function LanguagesStrip() {
   );
 }
 
-function ScanningView({ repoUrl }) {
+function ScanningView({ repoUrl, onCancel }) {
   return (
     <div className="scanning-wrap">
       <div className="scanning-card">
@@ -769,6 +774,14 @@ function ScanningView({ repoUrl }) {
         <p className="scanning-note">
           This typically takes 10 to 30 seconds depending on repository size.
         </p>
+        <button
+          className="scanning-cancel"
+          type="button"
+          onClick={onCancel}
+          title="Stop this scan and return home"
+        >
+          Cancel scan
+        </button>
       </div>
     </div>
   );
@@ -1702,7 +1715,12 @@ function AuthModal({ mode, loading, error, onSubmit, onClose, onSwitch }) {
   );
 }
 
-function HistoryPanel({ user, scans, loading, error, onGoHome, onOpen, onDelete }) {
+// The header count is derived from `scans`, the same array the list below
+// renders, so the two cannot disagree. It used to read user.scan_count, which
+// counts every scan the account has ever run and is not decremented by a
+// delete -- so emptying the history left the header claiming "4 scans" above
+// the empty-state message.
+function HistoryPanel({ scans, loading, error, onGoHome, onOpen, onDelete }) {
   return (
     <div className="history-overlay">
       <div className="history-inner">
@@ -1710,7 +1728,7 @@ function HistoryPanel({ user, scans, loading, error, onGoHome, onOpen, onDelete 
           <div>
             <div className="history-title">Scan History</div>
             <div className="history-count">
-              {user?.scan_count ?? 0} scans
+              {scans.length} {scans.length === 1 ? "scan" : "scans"}
             </div>
           </div>
           <button
@@ -2094,6 +2112,9 @@ export default function App() {
   const [expandedFiles, setExpandedFiles] = useState({});
   const [expandedFixes, setExpandedFixes] = useState({});
   const [urlError, setUrlError] = useState(null);
+  // The in-flight POST /scan, so it can be aborted from outside handleScan. A
+  // ref rather than state: aborting is a side effect, and nothing renders it.
+  const scanAbortRef = useRef(null);
 
   const [user, setUser] = useState(null);
   const [authToken, setAuthToken] = useState(null);
@@ -2473,6 +2494,11 @@ export default function App() {
       setUrlError("Please enter a valid GitHub repository URL");
       return;
     }
+    // Aborting this closes the socket, which is what the backend watches for:
+    // it polls request.is_disconnected() between batches of files and stops
+    // scanning rather than finishing a report nobody is waiting for.
+    const controller = new AbortController();
+    scanAbortRef.current = controller;
     setView("scanning");
     try {
       const post = (body) => {
@@ -2482,6 +2508,7 @@ export default function App() {
           method: "POST",
           headers,
           body: JSON.stringify(body),
+          signal: controller.signal,
         });
       };
 
@@ -2518,16 +2545,41 @@ export default function App() {
       }
       fetchRateLimit();
     } catch (err) {
+      // A cancel is not a failure: cancelScan has already put the user back on
+      // the input view, and showing an error there would report their own
+      // deliberate action as something going wrong.
+      if (err.name === "AbortError") return;
       const message =
         err instanceof TypeError
           ? "Scan failed. Could not reach the QLint backend."
           : err.message || "Scan failed. Please check the URL and try again.";
       setError(message);
       setView("input");
+    } finally {
+      if (scanAbortRef.current === controller) scanAbortRef.current = null;
     }
   };
 
+  // Shared by the Cancel button and by any in-app navigation away from a
+  // running scan, so leaving the page mid-scan drops the request instead of
+  // letting it finish unwatched.
+  const abortActiveScan = () => {
+    scanAbortRef.current?.abort();
+    scanAbortRef.current = null;
+  };
+
+  const cancelScan = () => {
+    abortActiveScan();
+    setError(null);
+    setUrlError(null);
+    setView("input");
+  };
+
   const handleReset = () => {
+    // Reset is also how the user leaves a running scan (the home button), so
+    // drop the request rather than leaving the backend fetching for a view
+    // that is already gone.
+    abortActiveScan();
     setRepoUrl("");
     setGithubToken("");
     setTokenVisible(false);
@@ -2605,7 +2657,7 @@ export default function App() {
             </>
           )}
           {!activePage && view === "scanning" && (
-            <ScanningView repoUrl={repoUrl} />
+            <ScanningView repoUrl={repoUrl} onCancel={cancelScan} />
           )}
           {!activePage && view === "results" && scanResult && (
             <ResultsView
@@ -2641,7 +2693,6 @@ export default function App() {
       )}
       {showHistory && (
         <HistoryPanel
-          user={user}
           scans={userScans}
           loading={historyLoading}
           error={historyError}

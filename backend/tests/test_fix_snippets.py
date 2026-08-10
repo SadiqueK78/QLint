@@ -14,6 +14,7 @@ is exactly how the JS/TS and Go variants used to differ from Python.
 import re
 
 import go_scanner
+import java_scanner
 import js_scanner
 from vulnerability_db import CRYPTO_DB
 
@@ -24,6 +25,7 @@ LANGUAGE_FIELDS = (
     ("fix_snippet", "python"),
     ("js_fix_snippet", "javascript/typescript"),
     ("go_fix_snippet", "go"),
+    ("java_fix_snippet", "java"),
 )
 
 
@@ -91,7 +93,11 @@ def test_safe_algorithms_are_advisory_notes_not_migrations():
 
 def test_synthetic_scanner_findings_follow_the_same_convention():
     """The scanners' own notes are advisory, so they stay single-panel."""
-    for module, label in ((go_scanner, "go_scanner"), (js_scanner, "js_scanner")):
+    for module, label in (
+        (go_scanner, "go_scanner"),
+        (js_scanner, "js_scanner"),
+        (java_scanner, "java_scanner"),
+    ):
         for key, entry in getattr(module, "_SYNTHETIC", {}).items():
             snippet = entry.get("fix_snippet")
             if not snippet:

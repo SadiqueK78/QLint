@@ -762,6 +762,27 @@ input {
   margin: 8px 0 0;
 }
 
+/* Quiet by default: cancelling is always available but never the suggested
+   action, so it reads as an escape hatch rather than a second call to action
+   competing with the scan in progress. */
+.scanning-cancel {
+  margin-top: 28px;
+  padding: 8px 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.scanning-cancel:hover {
+  border-color: var(--text-secondary);
+  color: var(--text-primary);
+}
+
 /* ---------------------------------------------------------- results */
 
 .results {

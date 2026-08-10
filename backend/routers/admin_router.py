@@ -1,4 +1,13 @@
-"""Admin-only usage dashboard: aggregate stats, user list, scan list."""
+"""Admin-only usage dashboard: aggregate stats, user list, scan list.
+
+Every query here reads the scans collection unfiltered, deliberately. A user's
+delete button is a soft delete (database.VISIBLE_SCAN) that hides a scan from
+their own history without removing the document, precisely so that what an
+operator sees does not move when a user tidies up their list. Do not add
+VISIBLE_SCAN to the queries below: total_scans, the per-repo and per-algorithm
+aggregates, and the severity totals are meant to describe everything QLint has
+ever run.
+"""
 
 import os
 from datetime import datetime, timedelta, timezone
@@ -236,6 +245,9 @@ async def list_all_scans(
                 "pqc_readiness_score": result.get("pqc_readiness_score", 0),
                 "total_findings": result.get("total_findings", 0),
                 "cached": bool(result.get("cached", False)),
+                # Still counted and still listed, but no longer in its owner's
+                # history. Surfaced so the admin view can tell the two apart.
+                "hidden_by_user": bool(row.get("deleted_at")),
                 "created_at": _iso(row.get("created_at")),
             }
         )
@@ -261,6 +273,9 @@ async def delete_user(user_id: str, admin: dict = Depends(get_admin_user)):
         target = await get_users().find_one({"_id": object_id})
         if not target:
             raise HTTPException(status_code=404, detail="User not found")
+        # The one real erasure path in QLint, and an admin-only, explicit one:
+        # removing an account takes its scans with it. A user's own delete
+        # button never reaches this -- it only sets deleted_at.
         await get_scans().delete_many({"user_id": user_id})
         await get_users().delete_one({"_id": object_id})
     except PyMongoError as exc:

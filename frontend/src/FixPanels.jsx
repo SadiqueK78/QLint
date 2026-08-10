@@ -2,16 +2,16 @@ import { useState } from "react";
 
 // The Before/After fix renderer, lifted out of App.jsx so it can be rendered
 // and asserted on directly. One component serves Python, JavaScript,
-// TypeScript, and Go: it branches on whether a snippet carries the two
+// TypeScript, Go, and Java: it branches on whether a snippet carries the two
 // labels, never on which language produced it.
 
 // Every migration snippet in vulnerability_db.py labels its two halves with
 // the same words, "Before:" and "After:" -- only the comment leader changes
-// with the language (# in Python, // in Go, JavaScript, and TypeScript).
+// with the language (# in Python, // in Go, JavaScript, TypeScript, and Java).
 // Matching the leader along with the label is what used to restrict the
 // two-column split to Python and drop every Go/JS/TS finding into the single
-// flat panel. Matching the label alone is what makes one renderer serve all
-// four languages.
+// flat panel. Matching the label alone is what makes one renderer serve every
+// language.
 const BEFORE_MARKER = /^\s*(?:#|\/\/)\s*Before\b/;
 const AFTER_MARKER = /^\s*(?:#|\/\/)\s*After\b/;
 
