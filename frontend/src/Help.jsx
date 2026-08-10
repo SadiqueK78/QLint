@@ -11,7 +11,7 @@ const FAQ = [
     q: "How do I scan a repository?",
     a: [
       "Paste a public GitHub repository URL into the field on the home page and press Scan Repository. Nothing is installed and no account is required. QLint reads the repository through the GitHub API, analyses it in memory, and discards the source; only the report is kept.",
-      "A scan covers Python, JavaScript, TypeScript, Go, and Java files. Everything else is skipped, along with vendored trees like node_modules and __pycache__.",
+      "A scan covers Python, JavaScript, TypeScript, Go, Java, and Rust files. Everything else is skipped, along with vendored trees like node_modules and __pycache__.",
     ],
   },
   {

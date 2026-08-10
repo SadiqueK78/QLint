@@ -19,7 +19,8 @@ export default function Terms() {
           QLint is a static analysis tool that reads a source repository and
           reports where it uses cryptography that a quantum computer would
           break, together with the NIST-standardised algorithms that replace it.
-          It scans Python, JavaScript, TypeScript, Go, and Java. It also runs
+          It scans Python, JavaScript, TypeScript, Go, Java, and Rust. It also
+          runs
           post-quantum benchmarks on demand, estimates Harvest Now Decrypt Later
           exposure, and can generate written explanations and migration diffs
           for individual findings.

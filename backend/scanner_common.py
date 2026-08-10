@@ -1,11 +1,12 @@
-"""Helpers shared by the three language scanners.
+"""Helpers shared by every language scanner.
 
-ast_scanner, js_scanner and go_scanner all need the same two things: a way to
-turn a character offset into a line/column pair, and a way to pull the text of
-a line back out of the source. js_scanner and go_scanner each carried their own
-copy; this module holds the one implementation all three use, so that "the line
-at N" means the same thing in every language and the code_snippet attached to a
-finding is produced in exactly one place.
+ast_scanner, js_scanner, go_scanner, java_scanner and rust_scanner all need the
+same two things: a way to turn a character offset into a line/column pair, and
+a way to pull the text of a line back out of the source. js_scanner and
+go_scanner each carried their own copy; this module holds the one
+implementation all of them use, so that "the line at N" means the same thing in
+every language and the code_snippet attached to a finding is produced in
+exactly one place.
 """
 
 

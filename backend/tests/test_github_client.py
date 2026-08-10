@@ -58,6 +58,8 @@ class TestLanguageForPath:
             ("cmd/main.go", "go"),
             ("src/main/java/com/example/Signer.java", "java"),
             ("SRC/MAIN/JAVA/KEYS.JAVA", "java"),
+            ("src/keys.rs", "rust"),
+            ("SRC/KEYS.RS", "rust"),
         ],
     )
     def test_supported_extensions(self, path, language):
@@ -80,6 +82,7 @@ class TestGetRepoFiles:
                 {"type": "blob", "path": "src/Component.tsx"},
                 {"type": "blob", "path": "main.go"},
                 {"type": "blob", "path": "src/main/java/Keys.java"},
+                {"type": "blob", "path": "src/keys.rs"},
                 {"type": "blob", "path": "README.md"},
                 {"type": "blob", "path": "go.mod"},
                 {"type": "tree", "path": "src"},
@@ -102,6 +105,7 @@ class TestGetRepoFiles:
             {"path": "src/Component.tsx", "language": "typescript"},
             {"path": "main.go", "language": "go"},
             {"path": "src/main/java/Keys.java", "language": "java"},
+            {"path": "src/keys.rs", "language": "rust"},
         ]
 
 

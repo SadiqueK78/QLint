@@ -31,6 +31,7 @@ from github_client import (
 from go_scanner import scan_go_source
 from java_scanner import scan_java_source
 from js_scanner import scan_js_source
+from rust_scanner import scan_rust_source
 from vulnerability_db import get_severity_score
 
 MAX_CONCURRENT_FETCHES = 10
@@ -95,6 +96,7 @@ SCANNERS = {
     "typescript": scan_js_source,
     "go": scan_go_source,
     "java": scan_java_source,
+    "rust": scan_rust_source,
 }
 
 # Directories with no first-party source in them. Walking a real checkout

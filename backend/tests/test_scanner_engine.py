@@ -137,6 +137,20 @@ class TestScanRepository:
         # Both halves the AI explain and patch endpoints require.
         assert finding["code_snippet"]
 
+    def test_rust_file_is_scanned_with_the_rust_scanner(
+        self, monkeypatch, mock_rate_limit_response
+    ):
+        contents = {"src/keys.rs": "use rsa::{RsaPrivateKey, RsaPublicKey};\n"}
+        report = run_scan(monkeypatch, contents, mock_rate_limit_response)
+        assert "RSA" in report["algorithms_found"]
+        assert report["languages_scanned"] == ["rust"]
+        finding = report["findings_by_file"]["src/keys.rs"][0]
+        assert finding["language"] == "rust"
+        # The Rust fix snippet, not the Python one, reaches the report.
+        assert "pqcrypto_mlkem" in finding["fix_snippet"]
+        # Both halves the AI explain and patch endpoints require.
+        assert finding["code_snippet"]
+
     def test_mixed_language_repo_reports_every_language(
         self, monkeypatch, sample_rsa_source, mock_rate_limit_response
     ):
@@ -230,13 +244,17 @@ class TestScanDirectory:
         (tmp_path / "E.java").write_text(
             'Cipher c = Cipher.getInstance("RSA");', encoding="utf-8"
         )
+        (tmp_path / "f.rs").write_text(
+            "use rsa::RsaPrivateKey;", encoding="utf-8"
+        )
         report = scan_directory(tmp_path)
-        assert report["scanned_files"] == 5
+        assert report["scanned_files"] == 6
         assert report["languages_scanned"] == [
             "go",
             "java",
             "javascript",
             "python",
+            "rust",
             "typescript",
         ]
 
@@ -255,6 +273,21 @@ class TestScanDirectory:
         assert finding["language"] == "java"
         assert finding["code_snippet"]
         assert "SHA3-512" in finding["fix_snippet"]
+
+    def test_rust_file_is_scanned_with_the_rust_scanner(self, tmp_path):
+        """The CLI path routes Rust too, not just the GitHub path."""
+        source = tmp_path / "src"
+        source.mkdir(parents=True)
+        (source / "digest.rs").write_text(
+            "use md_5::{Md5, Digest};\n", encoding="utf-8"
+        )
+        report = scan_directory(tmp_path)
+        assert report["languages_scanned"] == ["rust"]
+        assert "MD5" in report["algorithms_found"]
+        finding = report["findings_by_file"]["src/digest.rs"][0]
+        assert finding["language"] == "rust"
+        assert finding["code_snippet"]
+        assert "sha3::{Sha3_512, Digest}" in finding["fix_snippet"]
 
     def test_unsupported_extensions_are_ignored(self, tmp_path):
         (tmp_path / "notes.md").write_text("rsa.generate_private_key()", encoding="utf-8")

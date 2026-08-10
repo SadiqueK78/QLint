@@ -16,6 +16,7 @@ import re
 import go_scanner
 import java_scanner
 import js_scanner
+import rust_scanner
 from vulnerability_db import CRYPTO_DB
 
 BEFORE_MARKER = re.compile(r"^\s*(?:#|//)\s*Before\b", re.MULTILINE)
@@ -26,6 +27,7 @@ LANGUAGE_FIELDS = (
     ("js_fix_snippet", "javascript/typescript"),
     ("go_fix_snippet", "go"),
     ("java_fix_snippet", "java"),
+    ("rust_fix_snippet", "rust"),
 )
 
 
@@ -97,6 +99,7 @@ def test_synthetic_scanner_findings_follow_the_same_convention():
         (go_scanner, "go_scanner"),
         (js_scanner, "js_scanner"),
         (java_scanner, "java_scanner"),
+        (rust_scanner, "rust_scanner"),
     ):
         for key, entry in getattr(module, "_SYNTHETIC", {}).items():
             snippet = entry.get("fix_snippet")

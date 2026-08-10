@@ -726,16 +726,27 @@ const LANGUAGES = [
     extensions: ".java",
     detail: "JCA/JCE getInstance calls and Bouncy Castle classes",
   },
-  { name: "Rust", status: "soon", extensions: ".rs", detail: "In development" },
+  {
+    name: "Rust",
+    status: "active",
+    extensions: ".rs",
+    detail: "RustCrypto, ring, and openssl crate paths",
+  },
 ];
 
 function LanguagesStrip() {
+  // Counted from the table rather than written out, so the caption cannot go
+  // stale the next time a language ships.
+  const active = LANGUAGES.filter((lang) => lang.status === "active").length;
+  const planned = LANGUAGES.length - active;
   return (
     <section className="langs">
       <div className="langs-inner">
         <div className="section-head">
           <h2 className="section-title">Supported languages</h2>
-          <span className="section-meta">4 active / 2 planned</span>
+          <span className="section-meta">
+            {planned ? `${active} active / ${planned} planned` : `${active} active`}
+          </span>
         </div>
         <div className="lang-grid">
           {LANGUAGES.map((lang) => (
