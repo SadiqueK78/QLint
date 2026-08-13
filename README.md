@@ -56,6 +56,7 @@ QLint/
 │   ├── qlint_cli.py             # standalone CI scanner, no server or database
 │   ├── requirements.txt
 │   ├── requirements-pqc.txt     # liboqs, only for the benchmark lab
+│   ├── Dockerfile               # builds liboqs from source, then runs uvicorn
 │   ├── pytest.ini
 │   ├── .env.example
 │   └── tests/                   # one test module per source module
@@ -67,11 +68,46 @@ QLint/
 │   │   ├── api.js
 │   │   └── main.jsx
 │   ├── index.html
-│   └── package.json
+│   ├── package.json
+│   ├── Dockerfile               # vite build -> nginx
+│   └── nginx.conf               # SPA fallback for client-side routes
+├── docker-compose.yml           # mongodb + backend + frontend
 └── README.md
 ```
 
+## Running with Docker
+
+```bash
+cp backend/.env.example backend/.env   # then fill in your secrets
+docker compose up --build
+```
+
+Frontend on http://localhost:5174, backend on http://localhost:8000, MongoDB in
+its own container with a named volume — `docker compose down` keeps your data,
+`down -v` erases it.
+
+**This is what makes the PQC Benchmark Lab work anywhere.** The benchmark needs
+the liboqs C library in the backend process, which cannot be built on Windows —
+until now the only way to exercise `/benchmark/run` locally was to launch the
+backend from WSL with a separate virtualenv. `backend/Dockerfile` compiles
+liboqs from source at image build time, so the running container simply has it.
+No WSL, no toolchain on the host, and nothing fetched at first request.
+
+Configuration comes from `backend/.env` (optional — the stack starts without
+it), except `MONGODB_URI`, which compose sets to `mongodb://mongodb:27017`
+because inside the network the database is a service name, not localhost. To
+change anything for your machine only, copy
+`docker-compose.override.yml.example` to `docker-compose.override.yml`; compose
+merges it automatically and it is gitignored.
+
+See `docker-compose.yml` for the rest — it is the source of truth for ports,
+volumes, and service wiring.
+
 ## Setup
+
+Prefer to run it natively? The rest of this section covers that. Note that the
+PQC Benchmark Lab is the one feature a native Windows setup cannot serve; it
+answers 503 there, and everything else works normally.
 
 ### Backend
 
@@ -586,6 +622,7 @@ Shipped:
 - ~~F20: Standalone CLI + GitHub Action~~
 - ~~F26: Java scanning~~
 - ~~F27: Rust scanning~~
+- ~~F28: Docker support (liboqs built into the image — no WSL needed)~~
 
 Planned:
 
