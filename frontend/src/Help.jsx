@@ -57,6 +57,34 @@ const FAQ = [
     ],
   },
   {
+    q: "What does \"Create Pull Request\" do?",
+    a: [
+      "It takes the findings you tick on the consent screen, applies the generated patches to the files they came from, and opens a pull request on your repository with the result. QLint always creates a new branch for those commits; your default branch is never written to directly.",
+      "Nothing is merged automatically. The pull request sits there like any other, and you review it, ask for changes, merge it, or close it. If a finding cannot be patched cleanly it is left out and listed as skipped rather than forced in.",
+    ],
+  },
+  {
+    q: "Why do I need to connect write access separately?",
+    a: [
+      "The connection QLint uses to scan is read-only: it can list files and read their contents, and that is all it can do. Creating a branch, a commit, and a pull request needs permission to write, which is a different and higher level of access.",
+      "Keeping them apart means signing in to scan never quietly grants the ability to change your repositories. You grant write access as its own deliberate step, from the profile menu or from the pull request screen, and you can disconnect it again without affecting scanning. The write grant asks for the public_repo scope, the narrowest GitHub offers that can open a pull request.",
+    ],
+  },
+  {
+    q: "What happens if my code changed since I scanned it?",
+    a: [
+      "QLint re-reads every file from GitHub immediately before patching it and compares each finding against the line the scan recorded. If that line has moved, changed, or gone, the patch is not applied: guessing where it went would mean editing code nobody has looked at.",
+      "Those findings are skipped, not silently dropped. The result screen shows a \"Skipped, and why\" section naming each one, its file and line, and the reason it was left alone, and the same list appears in the pull request body. Re-scan the repository and create the pull request again to pick them up against the current code.",
+    ],
+  },
+  {
+    q: "Is it safe to just click Create Pull Request?",
+    a: [
+      "It is a pull request, not a merge. Nothing lands on your default branch, and closing the pull request without merging leaves your repository exactly as it is today; the branch it created can be deleted like any other.",
+      "That said, the changes are model-generated, the same as the patches in the results view. Read the diff before merging, check the callers of anything it touched, and run your tests. Treat it as a well-informed first draft from a contributor who has not seen the rest of your codebase.",
+    ],
+  },
+  {
     q: "What is SARIF, and why would I download it?",
     a: [
       "SARIF is the Static Analysis Results Interchange Format, a standard file format that security tools use to describe findings. Because it is a standard, tools that have never heard of QLint can still read a QLint report.",

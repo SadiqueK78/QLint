@@ -47,6 +47,13 @@ class UserDocument(BaseModel):
     github_access_token: str | None = None
     github_username: str | None = None
     github_connected: bool = False
+    # F29's write connection, kept in its own fields rather than widened onto
+    # the ones above. An account can hold either, both, or neither, and
+    # disconnecting one must not disturb the other.
+    github_write_token: str | None = None
+    github_write_username: str | None = None
+    github_write_scope: str | None = None
+    github_write_connected: bool = False
 
 
 class UserResponse(BaseModel):
@@ -57,6 +64,11 @@ class UserResponse(BaseModel):
     role: str = "user"
     github_connected: bool = False
     github_username: str | None = None
+    # Whether the pull request feature is reachable for this account. The
+    # token itself is never part of any response.
+    github_write_connected: bool = False
+    github_write_username: str | None = None
+    github_write_scope: str | None = None
 
 
 class TokenResponse(BaseModel):
@@ -91,4 +103,7 @@ def user_to_response(user: dict) -> UserResponse:
         role=user.get("role", "user"),
         github_connected=bool(user.get("github_connected", False)),
         github_username=user.get("github_username"),
+        github_write_connected=bool(user.get("github_write_connected", False)),
+        github_write_username=user.get("github_write_username"),
+        github_write_scope=user.get("github_write_scope"),
     )

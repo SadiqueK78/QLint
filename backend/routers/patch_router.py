@@ -67,7 +67,7 @@ class FindingPatchRequest(BaseModel):
         return value
 
 
-def _cache_key(finding: FindingPatchRequest) -> str:
+def _cache_key(finding: FindingPatchRequest, grounding: str | None = None) -> str:
     """Hash everything the prompt is built from, the code included.
 
     Wide from the start: F22 shipped this narrower, keyed on algorithm and
@@ -75,6 +75,16 @@ def _cache_key(finding: FindingPatchRequest) -> str:
     code. file/line still stay out -- two identical vulnerable lines deserve
     the same patch wherever they live -- but every field the model reads is in
     the hash, above all the two snippets.
+
+    grounding is the real file excerpt the pull request path puts in the
+    prompt. It has to be in the key for the same reason everything else is:
+    it changes the prompt, so it changes the answer. A patch generated blind
+    for the results view describes a file the model never saw and generally
+    will not apply, so serving it to the pull request path -- which is where
+    "will not apply" turns into a skipped finding -- would keep F29's bug
+    alive in the cache for the full 30 days. Keying on the excerpt also means
+    a patch is only reused while the surrounding code it was written against
+    is still the surrounding code.
     """
     payload = {
         "algorithm": finding.algorithm,
@@ -85,6 +95,7 @@ def _cache_key(finding: FindingPatchRequest) -> str:
         "language": finding.language,
         "code_snippet": finding.code_snippet,
         "fix_snippet": finding.fix_snippet,
+        "grounding": grounding,
     }
     raw = json.dumps(payload, sort_keys=True)
     return hashlib.sha256(raw.encode()).hexdigest()

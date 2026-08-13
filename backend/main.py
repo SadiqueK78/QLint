@@ -14,6 +14,7 @@ from routers.explain_router import router as explain_router
 from routers.hndl_router import router as hndl_router
 from routers.oauth_router import router as oauth_router
 from routers.patch_router import router as patch_router
+from routers.pr_router import router as pr_router
 from routers.scan_router import router as scan_router
 from routers.user_router import router as user_router
 
@@ -71,6 +72,9 @@ app.include_router(oauth_router, tags=["auth"])
 app.include_router(scan_router, tags=["scan"])
 app.include_router(explain_router, tags=["scan"])
 app.include_router(patch_router, tags=["scan"])
+# The one router that writes to a user's repository. Mounted like any other,
+# but reachable only with the separate write-scope token oauth_router stores.
+app.include_router(pr_router, tags=["scan"])
 app.include_router(user_router, tags=["user"])
 app.include_router(admin_router, tags=["admin"])
 app.include_router(hndl_router, tags=["hndl"])

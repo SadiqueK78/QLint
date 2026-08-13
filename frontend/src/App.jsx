@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import "./App.css";
 import PqcBenchmark from "./PqcBenchmark";
 import About from "./About";
@@ -78,6 +79,29 @@ const GITHUB_ERROR_MESSAGES = {
 
 function githubErrorMessage(code) {
   return GITHUB_ERROR_MESSAGES[code] || GITHUB_ERROR_MESSAGES.server_error;
+}
+
+// The write connection's own failures, on their own channel. They share none
+// of the messages above on purpose: "could not connect write access" and
+// "could not sign you in" call for different next steps, and a write failure
+// must never read as having lost the session.
+const GITHUB_WRITE_ERROR_MESSAGES = {
+  no_code: "GitHub did not send an authorization code. Try connecting again.",
+  token_exchange_failed:
+    "GitHub rejected the write connection request. The code may have expired. Try again.",
+  scope_denied:
+    "GitHub did not grant the repository access QLint needs to open a pull request, so nothing was saved. Try again and leave the repository permission checked.",
+  db_unavailable:
+    "GitHub granted write access, but QLint could not reach its database to save it. Start MongoDB and try again.",
+  unknown_account:
+    "The write connection did not match a QLint account. Sign in again and retry.",
+  server_error: "Something went wrong while connecting GitHub write access.",
+};
+
+function githubWriteErrorMessage(code) {
+  return (
+    GITHUB_WRITE_ERROR_MESSAGES[code] || GITHUB_WRITE_ERROR_MESSAGES.server_error
+  );
 }
 
 const startGithubOAuth = () => {
@@ -209,11 +233,11 @@ function ThemeToggle({ theme, onToggle, extraClass = "" }) {
   );
 }
 
-function PersonIcon() {
+function PersonIcon({ size = 16 }) {
   return (
     <svg
-      width="16"
-      height="16"
+      width={size}
+      height={size}
       viewBox="0 0 24 24"
       fill="none"
       stroke="#FFFFFF"
@@ -326,11 +350,41 @@ function Navbar({
   onShowHistory,
   onShowAdmin,
   onDisconnectGithub,
+  onConnectGithubWrite,
+  onDisconnectGithubWrite,
   route,
   onNavigate,
 }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
+  const accountRef = useRef(null);
   const closeSidebar = () => setSidebarOpen(false);
+
+  // The profile menu dismisses on everything that means "I am done here":
+  // a click anywhere outside it, Escape, or choosing one of its items. The
+  // first two matter because its items navigate away or open GitHub -- a
+  // menu left hanging over the page after that reads as a stuck dropdown.
+  useEffect(() => {
+    if (!accountOpen) return undefined;
+    const onPointerDown = (event) => {
+      if (!accountRef.current?.contains(event.target)) setAccountOpen(false);
+    };
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") setAccountOpen(false);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [accountOpen]);
+
+  const fromAccountMenu = (action) => () => {
+    setAccountOpen(false);
+    action();
+  };
+
   return (
     <header className="navbar">
       <div className="navbar-inner">
@@ -364,73 +418,154 @@ function Navbar({
               {page.label}
             </a>
           ))}
+          {/* Same destination the "GitHub" button had; the label says what
+              the link is for rather than where it points. */}
           <a
             className="nav-btn"
             href={REPO_URL}
             target="_blank"
             rel="noreferrer"
           >
-            GitHub
+            Contribute
           </a>
-          {user ? (
-            <>
-              <span className="nav-user" title={user.email}>
-                <PersonIcon />
-                <span className="nav-user-email">
-                  {truncateEmail(user.email)}
-                </span>
-              </span>
-              {user.github_connected ? (
-                <span className="gh-status" title={user.github_username ?? ""}>
-                  <span className="gh-status-label">GitHub Connected</span>
-                  <button
-                    className="gh-disconnect"
-                    type="button"
-                    onClick={onDisconnectGithub}
-                  >
-                    Disconnect
-                  </button>
-                </span>
-              ) : (
-                <button
-                  className="nav-btn nav-btn-icon"
-                  type="button"
-                  onClick={startGithubOAuth}
-                >
-                  <GitHubIcon />
-                  Connect GitHub
-                </button>
-              )}
-              <button
-                className="nav-btn"
-                type="button"
-                onClick={onShowHistory}
-              >
-                My Scans
-              </button>
-              {user.role === "admin" && (
-                <button
-                  className="nav-btn"
-                  type="button"
-                  onClick={onShowAdmin}
-                >
-                  Admin
-                </button>
-              )}
-              <button className="nav-btn" type="button" onClick={onLogout}>
-                Log out
-              </button>
-            </>
-          ) : (
-            <>
-              <button className="nav-btn" type="button" onClick={onLogin}>
-                Log in
-              </button>
-              <button className="nav-btn" type="button" onClick={onSignup}>
-                Sign up
-              </button>
-            </>
-          )}
+          {/* Everything account-shaped lives behind this one icon. The bar
+              used to carry the email, both GitHub connections, My Scans,
+              Admin and Log out side by side -- more chrome than the three
+              pages it sat next to, and most of it rarely touched. */}
+          <div className="nav-account" ref={accountRef}>
+            <button
+              className="nav-profile"
+              type="button"
+              title={user ? user.email : "Account"}
+              aria-label={user ? `Account: ${user.email}` : "Account"}
+              aria-haspopup="menu"
+              aria-expanded={accountOpen}
+              onClick={() => setAccountOpen((prev) => !prev)}
+            >
+              <PersonIcon size={18} />
+            </button>
+            {accountOpen && (
+              <div className="account-menu" role="menu">
+                {user ? (
+                  <>
+                    <div className="account-menu-head">
+                      <span className="account-menu-email">{user.email}</span>
+                      <span className="account-menu-sub">
+                        {user.role === "admin" ? "Administrator" : "Signed in"}
+                      </span>
+                    </div>
+                    {/* The two GitHub grants, stacked but kept visibly
+                        separate: read is what scanning uses, write is what
+                        opening a pull request needs, and they are distinct
+                        tokens with distinct scopes. Neither row closes the
+                        menu -- the point of acting here is watching the
+                        status on the same line change. */}
+                    <div className="account-menu-row">
+                      <span className="account-menu-row-text">
+                        <span className="account-menu-row-label">GitHub</span>
+                        <span className="account-menu-row-value">
+                          {user.github_connected
+                            ? `Connected${
+                                user.github_username
+                                  ? ` as ${user.github_username}`
+                                  : ""
+                              }`
+                            : "Not connected"}
+                        </span>
+                      </span>
+                      <button
+                        className="account-menu-link"
+                        type="button"
+                        onClick={
+                          user.github_connected
+                            ? onDisconnectGithub
+                            : startGithubOAuth
+                        }
+                      >
+                        {user.github_connected ? "Disconnect" : "Connect"}
+                      </button>
+                    </div>
+                    <div className="account-menu-row">
+                      <span className="account-menu-row-text">
+                        <span className="account-menu-row-label">
+                          Write access
+                        </span>
+                        <span className="account-menu-row-value">
+                          {user.github_write_connected
+                            ? `On as ${
+                                user.github_write_username || "GitHub"
+                              }`
+                            : "Off"}
+                        </span>
+                      </span>
+                      <button
+                        className={`switch${
+                          user.github_write_connected ? " switch-on" : ""
+                        }`}
+                        type="button"
+                        role="switch"
+                        aria-checked={Boolean(user.github_write_connected)}
+                        aria-label="GitHub write access"
+                        onClick={
+                          user.github_write_connected
+                            ? onDisconnectGithubWrite
+                            : onConnectGithubWrite
+                        }
+                      >
+                        <span className="switch-knob" />
+                      </button>
+                    </div>
+                    <div className="account-menu-sep" />
+                    <button
+                      className="account-menu-item"
+                      type="button"
+                      role="menuitem"
+                      onClick={fromAccountMenu(onShowHistory)}
+                    >
+                      My Scans
+                    </button>
+                    {user.role === "admin" && (
+                      <button
+                        className="account-menu-item"
+                        type="button"
+                        role="menuitem"
+                        onClick={fromAccountMenu(onShowAdmin)}
+                      >
+                        Admin
+                      </button>
+                    )}
+                    <button
+                      className="account-menu-item"
+                      type="button"
+                      role="menuitem"
+                      onClick={fromAccountMenu(onLogout)}
+                    >
+                      Log out
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      className="account-menu-item"
+                      type="button"
+                      role="menuitem"
+                      onClick={fromAccountMenu(onLogin)}
+                    >
+                      Log in
+                    </button>
+                    <button
+                      className="account-menu-item"
+                      type="button"
+                      role="menuitem"
+                      onClick={fromAccountMenu(onSignup)}
+                    >
+                      Sign up
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
       {sidebarOpen && (
@@ -462,7 +597,7 @@ function Navbar({
           target="_blank"
           rel="noreferrer"
         >
-          GitHub
+          Contribute
         </a>
         {user ? (
           <>
@@ -491,8 +626,9 @@ function Navbar({
                 Admin
               </button>
             )}
-            {/* .nav-btn and .gh-status are hidden on mobile, so the GitHub
-                connection is managed from here instead. */}
+            {/* The profile menu stays reachable on mobile, but the sidebar
+                keeps its own copy of the GitHub controls: it is the menu a
+                narrow viewport opens by habit. */}
             <button
               className="sidebar-item"
               type="button"
@@ -503,6 +639,21 @@ function Navbar({
               }}
             >
               {user.github_connected ? "Disconnect GitHub" : "Connect GitHub"}
+            </button>
+            {/* The write connection is managed separately from the one above,
+                because it is a separate grant with a separate token. */}
+            <button
+              className="sidebar-item"
+              type="button"
+              onClick={() => {
+                closeSidebar();
+                if (user.github_write_connected) onDisconnectGithubWrite();
+                else onConnectGithubWrite();
+              }}
+            >
+              {user.github_write_connected
+                ? "Disconnect write access"
+                : "Connect write access"}
             </button>
             <button
               className="sidebar-item"
@@ -906,6 +1057,373 @@ function findingRequestBody(finding) {
     code_snippet: finding.code_snippet,
     fix_snippet: finding.fix_snippet,
   };
+}
+
+// ---------------------------------------------------------------------------
+// F29: one-click migration pull requests.
+//
+// The button below is the only thing in QLint that can change a user's
+// repository, so the flow is built around two separations that are easy to
+// collapse by accident and expensive to get wrong.
+//
+// Separation one is the connection: scanning uses a read-only GitHub token,
+// creating a pull request uses a different token from a different button with
+// a different scope. The feature stays visible without it -- hiding it would
+// make "why can't I do this" unanswerable -- but the confirm button is not
+// reachable until write access is connected.
+//
+// Separation two is the click: opening the confirmation screen and creating
+// the pull request are two deliberate actions. Nothing reaches GitHub on the
+// first one.
+// ---------------------------------------------------------------------------
+
+// A finding can go into a pull request only if there is real code to change
+// and a real replacement to change it to -- the same two fields /scan/patch
+// refuses to work without. Safe and info findings are excluded because there
+// is nothing to migrate: they are already quantum-safe.
+function isPatchable(finding) {
+  return Boolean(
+    finding.code_snippet &&
+      finding.fix_snippet &&
+      (finding.severity === "critical" || finding.severity === "warning")
+  );
+}
+
+function patchableFindings(result) {
+  return Object.entries(result.findings_by_file || {}).flatMap(
+    ([file, findings]) =>
+      (findings || []).filter(isPatchable).map((finding) => ({
+        ...finding,
+        file: finding.file || file,
+      }))
+  );
+}
+
+function findingKey(finding) {
+  return `${finding.file}:${finding.line}`;
+}
+
+async function createPullRequest(scanId, authToken, findings) {
+  const response = await fetch(`${API_BASE}/scan/${scanId}/create-pr`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${authToken}`,
+    },
+    body: JSON.stringify({
+      findings: findings.map((f) => ({ file: f.file, line: f.line })),
+    }),
+  });
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(data?.detail || `Pull request failed (HTTP ${response.status})`);
+  }
+  return data;
+}
+
+// Shown in place of the consent screen when the write connection is missing.
+// A prompt rather than a hidden button: the user should be able to find out
+// this feature exists before deciding whether to grant anything.
+function WriteAccessPrompt({ onConnect, connecting }) {
+  return (
+    <div className="pr-connect">
+      <p className="pr-connect-lead">
+        Creating a pull request needs a separate GitHub connection from the
+        read-only one QLint uses to scan.
+      </p>
+      <ul className="pr-facts">
+        <li>
+          It asks for the <code>public_repo</code> scope, the narrowest GitHub
+          offers that can create a branch, a commit and a pull request.
+        </li>
+        <li>
+          It is stored separately from your scanning connection. Disconnecting
+          one leaves the other alone.
+        </li>
+        <li>
+          Nothing is written to any repository until you confirm a specific
+          pull request on the next screen.
+        </li>
+      </ul>
+      <button
+        className="btn-primary btn-small"
+        type="button"
+        onClick={onConnect}
+        disabled={connecting}
+      >
+        {connecting ? "Opening GitHub..." : "Connect write access"}
+      </button>
+    </div>
+  );
+}
+
+function PRConsentModal({
+  repo,
+  findings,
+  selected,
+  onToggle,
+  onToggleFile,
+  writeConnected,
+  connecting,
+  onConnect,
+  creating,
+  error,
+  onCancel,
+  onConfirm,
+}) {
+  const chosen = findings.filter((f) => selected.has(findingKey(f)));
+  const files = [...new Set(chosen.map((f) => f.file))].sort();
+  const byFile = findings.reduce((groups, finding) => {
+    (groups[finding.file] = groups[finding.file] || []).push(finding);
+    return groups;
+  }, {});
+
+  // Rendered into document.body rather than in place: the consent screen
+  // lives deep inside the results tree, and a portal is the only way its
+  // stacking is guaranteed not to be capped by some ancestor between here
+  // and the root picking up a stacking context later.
+  return createPortal(
+    <div className="modal-overlay" onClick={creating ? undefined : onCancel}>
+      <div
+        className="pr-modal"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Create pull request"
+      >
+        <button
+          className="icon-btn auth-close"
+          type="button"
+          aria-label="Close"
+          onClick={onCancel}
+          disabled={creating}
+        >
+          <CloseIcon />
+        </button>
+        <div className="auth-title">Create a pull request</div>
+        <p className="auth-sub">
+          Review what QLint is about to do before anything reaches GitHub.
+        </p>
+
+        {!writeConnected ? (
+          <WriteAccessPrompt onConnect={onConnect} connecting={connecting} />
+        ) : (
+          <>
+            <div className="pr-target">
+              <span className="pr-target-label">Repository</span>
+              <span className="pr-target-repo">{repo}</span>
+            </div>
+
+            {/* The four promises this screen makes, stated rather than
+                implied. Each one is a thing a user could reasonably fear is
+                happening when they hand over write access. */}
+            <ul className="pr-facts">
+              <li>
+                QLint creates a <strong>new branch</strong> and opens a{" "}
+                <strong>new pull request</strong> from it.
+              </li>
+              <li>
+                Your default branch is <strong>not modified directly</strong>.
+              </li>
+              <li>
+                Nothing is <strong>merged automatically</strong>. You review and
+                merge it yourself, or you do not.
+              </li>
+              <li>
+                You can <strong>close the pull request without merging</strong>{" "}
+                at any time, exactly like any other pull request. Closing it
+                leaves your repository as it is today.
+              </li>
+            </ul>
+
+            <div className="pr-summary-row">
+              <span className="pr-count">
+                {chosen.length} of {findings.length} finding
+                {findings.length === 1 ? "" : "s"} selected
+              </span>
+              <span className="pr-count">
+                {files.length} file{files.length === 1 ? "" : "s"} will be
+                changed
+              </span>
+            </div>
+
+            <div className="pr-file-list">
+              {Object.entries(byFile).map(([file, fileFindings]) => {
+                const allOn = fileFindings.every((f) =>
+                  selected.has(findingKey(f))
+                );
+                return (
+                  <div className="pr-file" key={file}>
+                    <label className="pr-file-header">
+                      <input
+                        type="checkbox"
+                        checked={allOn}
+                        onChange={() => onToggleFile(file, !allOn)}
+                        disabled={creating}
+                      />
+                      <span className="pr-file-name">{file}</span>
+                      <span className="file-badge">{fileFindings.length}</span>
+                    </label>
+                    {fileFindings.map((finding) => {
+                      const key = findingKey(finding);
+                      return (
+                        <label className="pr-finding" key={key}>
+                          <input
+                            type="checkbox"
+                            checked={selected.has(key)}
+                            onChange={() => onToggle(key)}
+                            disabled={creating}
+                          />
+                          <span className={`algo-pill pill-${finding.severity}`}>
+                            {finding.algorithm}
+                          </span>
+                          <span className="pr-finding-line">
+                            line {finding.line}
+                          </span>
+                          <code className="pr-finding-code">
+                            {finding.code_snippet}
+                          </code>
+                        </label>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </div>
+
+            <p className="pr-revalidate-note">
+              Before patching, QLint re-reads each file from GitHub and skips
+              any finding whose code has changed since the scan rather than
+              applying the patch to the wrong place. Anything skipped is listed
+              in the pull request and shown to you here.
+            </p>
+
+            {error && <div className="auth-error">{error}</div>}
+
+            <div className="pr-actions">
+              <button
+                className="btn-ghost btn-small"
+                type="button"
+                onClick={onCancel}
+                disabled={creating}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn-primary btn-small"
+                type="button"
+                onClick={onConfirm}
+                disabled={creating || chosen.length === 0}
+              >
+                {creating
+                  ? "Creating pull request..."
+                  : `Create Pull Request (${chosen.length})`}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+function PRResultModal({ result, onClose }) {
+  const applied = result.applied || [];
+  const skipped = result.skipped || [];
+  return createPortal(
+    <div className="modal-overlay" onClick={onClose}>
+      <div
+        className="pr-modal"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Pull request result"
+      >
+        <button
+          className="icon-btn auth-close"
+          type="button"
+          aria-label="Close"
+          onClick={onClose}
+        >
+          <CloseIcon />
+        </button>
+        <div className="auth-title">
+          {result.created ? "Pull request created" : "No pull request created"}
+        </div>
+        <p className="auth-sub">
+          {result.created
+            ? "Nothing has been merged. Review it on GitHub, or close it."
+            : result.detail}
+        </p>
+
+        {result.created && (
+          <a
+            className="pr-link"
+            href={result.pr_url}
+            target="_blank"
+            rel="noreferrer"
+          >
+            {`Open pull request #${result.pr_number} on GitHub`}
+          </a>
+        )}
+
+        <div className="pr-result-counts">
+          <span className="pr-badge pr-badge-applied">
+            {applied.length} applied
+          </span>
+          <span className="pr-badge pr-badge-skipped">
+            {skipped.length} skipped
+          </span>
+          {result.created && (
+            <span className="pr-badge pr-badge-branch">{result.branch}</span>
+          )}
+        </div>
+
+        {applied.length > 0 && (
+          <div className="pr-outcome-group">
+            <div className="fix-panel-title">Patched</div>
+            {applied.map((item) => (
+              <div className="pr-outcome" key={findingKey(item.finding)}>
+                <span
+                  className={`algo-pill pill-${item.finding.severity}`}
+                >
+                  {item.finding.algorithm}
+                </span>
+                <code className="pr-outcome-loc">
+                  {item.finding.file}:{item.finding.line}
+                </code>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {skipped.length > 0 && (
+          <div className="pr-outcome-group">
+            <div className="fix-panel-title">Skipped, and why</div>
+            {skipped.map((item) => (
+              <div className="pr-outcome pr-outcome-skipped" key={findingKey(item.finding)}>
+                <span className={`algo-pill pill-${item.finding.severity}`}>
+                  {item.finding.algorithm}
+                </span>
+                <code className="pr-outcome-loc">
+                  {item.finding.file}:{item.finding.line}
+                </code>
+                <span className="pr-outcome-reason">{item.reason}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="pr-actions">
+          <button className="btn-primary btn-small" type="button" onClick={onClose}>
+            Done
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
 }
 
 function ExplainBody({ loading, error, explanation, onRetry }) {
@@ -1413,6 +1931,8 @@ function ResultsView({
   onReset,
   onRescan,
   authToken,
+  user,
+  onConnectWrite,
 }) {
   const allFindings = Object.values(result.findings_by_file).flat();
 
@@ -1486,6 +2006,72 @@ function ResultsView({
   const toggleFix = (key) =>
     setExpandedFixes((prev) => ({ ...prev, [key]: !prev[key] }));
 
+  // --- pull request flow -------------------------------------------------
+  // Three stages, and the transition between the first two is the consent
+  // gate: opening the modal reaches nothing, only "Create Pull Request"
+  // inside it does.
+  const [prStage, setPrStage] = useState(null); // null | "consent" | "result"
+  const [prSelected, setPrSelected] = useState(() => new Set());
+  const [prCreating, setPrCreating] = useState(false);
+  const [prConnecting, setPrConnecting] = useState(false);
+  const [prError, setPrError] = useState(null);
+  const [prResult, setPrResult] = useState(null);
+
+  const prFindings = patchableFindings(result);
+  const writeConnected = Boolean(user?.github_write_connected);
+  // Anonymous scans are not stored against an account, so there is no scan id
+  // to address and nothing to prove ownership of.
+  const prAvailable = Boolean(result.scan_id && authToken);
+
+  const openPrConsent = () => {
+    setPrError(null);
+    setPrResult(null);
+    setPrSelected(new Set(prFindings.map(findingKey)));
+    setPrStage("consent");
+  };
+
+  const togglePrFinding = (key) =>
+    setPrSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  const togglePrFile = (file, on) =>
+    setPrSelected((prev) => {
+      const next = new Set(prev);
+      for (const finding of prFindings.filter((f) => f.file === file)) {
+        if (on) next.add(findingKey(finding));
+        else next.delete(findingKey(finding));
+      }
+      return next;
+    });
+
+  const confirmCreatePr = async () => {
+    setPrCreating(true);
+    setPrError(null);
+    try {
+      const chosen = prFindings.filter((f) => prSelected.has(findingKey(f)));
+      const created = await createPullRequest(result.scan_id, authToken, chosen);
+      setPrResult(created);
+      setPrStage("result");
+    } catch (err) {
+      setPrError(err.message || "Could not create the pull request.");
+    } finally {
+      setPrCreating(false);
+    }
+  };
+
+  const startWriteConnect = async () => {
+    setPrConnecting(true);
+    try {
+      await onConnectWrite();
+    } finally {
+      setPrConnecting(false);
+    }
+  };
+
   return (
     <div className="results">
       <div className="results-header">
@@ -1533,6 +2119,25 @@ function ResultsView({
             >
               {exportBusy === "cbom" ? "Building CBOM..." : "Download CBOM"}
             </button>
+            {/* Shown whenever there is something to patch, connected or not.
+                Hiding it until write access exists would make the feature
+                undiscoverable to exactly the people who have not granted it
+                yet; the consent screen explains what is missing instead. */}
+            {prFindings.length > 0 && (
+              <button
+                className="btn-ghost btn-small pr-open-btn"
+                type="button"
+                onClick={openPrConsent}
+                disabled={!prAvailable}
+                title={
+                  prAvailable
+                    ? "Open a pull request migrating the patchable findings"
+                    : "Sign in and re-scan to create a pull request: only a saved scan can be turned into one"
+                }
+              >
+                {`Create Pull Request (${prFindings.length})`}
+              </button>
+            )}
             <button
               className="btn-primary btn-small"
               type="button"
@@ -1687,6 +2292,26 @@ function ResultsView({
             })
           )}
         </>
+      )}
+
+      {prStage === "consent" && (
+        <PRConsentModal
+          repo={result.repo}
+          findings={prFindings}
+          selected={prSelected}
+          onToggle={togglePrFinding}
+          onToggleFile={togglePrFile}
+          writeConnected={writeConnected}
+          connecting={prConnecting}
+          onConnect={startWriteConnect}
+          creating={prCreating}
+          error={prError}
+          onCancel={() => setPrStage(null)}
+          onConfirm={confirmCreatePr}
+        />
+      )}
+      {prStage === "result" && prResult && (
+        <PRResultModal result={prResult} onClose={() => setPrStage(null)} />
       )}
     </div>
   );
@@ -2278,8 +2903,44 @@ export default function App() {
     return {
       token: params.get("github_token"),
       error: params.get("github_error"),
+      // The write connection comes back on its own two parameters, so a
+      // failed write connection never reads as a failed sign-in.
+      write: params.get("github_write"),
+      writeError: params.get("github_write_error"),
     };
   });
+
+  // The write connection lands here. Separate effect from sign-in because it
+  // is a separate thing: the session is untouched, only the account's write
+  // status has changed, so /auth/me is re-read rather than a token stored.
+  useEffect(() => {
+    const { write, writeError } = oauthLanding;
+    if (!write && !writeError) return;
+    window.history.replaceState({}, "", window.location.pathname);
+
+    if (writeError) {
+      setAuthNotice(githubWriteErrorMessage(writeError));
+      return;
+    }
+    const stored = localStorage.getItem(TOKEN_KEY);
+    if (!stored) return;
+    fetch(`${API_BASE}/auth/me`, {
+      headers: { Authorization: `Bearer ${stored}` },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data) {
+          setUser(data);
+          setAuthToken(stored);
+          showToast("GitHub write access connected");
+        }
+      })
+      .catch(() => {
+        setAuthNotice(
+          "GitHub granted write access, but QLint could not refresh your account. Reload the page."
+        );
+      });
+  }, []);
 
   useEffect(() => {
     const oauthToken = oauthLanding.token;
@@ -2487,6 +3148,48 @@ export default function App() {
       });
     } catch {
       // Optimistic removal stands; the next open refetches the real list.
+    }
+  };
+
+  // The write connection, kept entirely separate from startGithubOAuth above.
+  // A POST rather than a plain link so the session token travels in a header
+  // instead of a query string; the backend answers with the GitHub consent
+  // URL and the browser goes there.
+  const connectGithubWrite = async () => {
+    if (!authToken) {
+      setAuthNotice("Sign in before connecting GitHub write access.");
+      return;
+    }
+    try {
+      const res = await fetch(`${API_BASE}/auth/github/write/authorize`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      window.location.href = data.authorize_url;
+    } catch {
+      setAuthNotice(
+        "Could not start the GitHub write connection. Is the backend running?"
+      );
+    }
+  };
+
+  const disconnectGithubWrite = async () => {
+    if (!authToken) return;
+    try {
+      const res = await fetch(`${API_BASE}/auth/github/write/disconnect`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setUser((prev) =>
+        prev
+          ? { ...prev, github_write_connected: false, github_write_username: null }
+          : prev
+      );
+      showToast("GitHub write access disconnected");
+    } catch {
+      showToast("Could not disconnect write access");
     }
   };
 
@@ -2704,6 +3407,8 @@ export default function App() {
           setShowAdmin(true);
         }}
         onDisconnectGithub={disconnectGithub}
+        onConnectGithubWrite={connectGithubWrite}
+        onDisconnectGithubWrite={disconnectGithubWrite}
         route={route}
         onNavigate={navigate}
         onGoHome={goHome}
@@ -2764,6 +3469,8 @@ export default function App() {
               onReset={handleReset}
               onRescan={() => handleScan(true)}
               authToken={authToken}
+              user={user}
+              onConnectWrite={connectGithubWrite}
             />
           )}
         </main>

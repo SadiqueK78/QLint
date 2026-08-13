@@ -131,8 +131,15 @@ async def get_file_content(
     file_path: str,
     token: str,
     client: httpx.AsyncClient | None = None,
+    ref: str | None = None,
 ) -> str | None:
-    """Fetch one file's text content. Returns None for files larger than 1 MB."""
+    """Fetch one file's text content. Returns None for files larger than 1 MB.
+
+    ref pins the read to a branch, tag or commit sha. Scanning leaves it unset
+    and reads the default branch; pull request creation always passes the
+    branch it is about to patch, because "the content right now on the branch
+    I am editing" is the only thing a re-validation check may be run against.
+    """
     own_client = client is None
     if own_client:
         client = httpx.AsyncClient(base_url=GITHUB_API, timeout=30.0)
@@ -140,6 +147,7 @@ async def get_file_content(
         response = await client.get(
             f"/repos/{owner}/{repo}/contents/{file_path}",
             headers=_headers(token),
+            params={"ref": ref} if ref else None,
         )
         if response.status_code == 404:
             raise RepoNotFoundError(f"File not found: {owner}/{repo}/{file_path}")
