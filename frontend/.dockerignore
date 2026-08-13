@@ -1,0 +1,14 @@
+# Installed inside the image by `npm ci`; the host copy is both huge and
+# potentially built for the wrong platform.
+node_modules/
+
+# Produced inside the image by `npm run build`. A stale host build must never
+# shadow the fresh one.
+dist/
+
+.git/
+.gitignore
+Dockerfile
+.dockerignore
+npm-debug.log*
+.vite/

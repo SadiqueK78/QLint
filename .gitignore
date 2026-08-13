@@ -12,6 +12,9 @@ backend/.env
 frontend/node_modules/
 frontend/dist/
 
+# Docker — per-machine compose tweaks, from the .example file
+docker-compose.override.yml
+
 # Editor/OS noise
 .vscode/
 .idea/
