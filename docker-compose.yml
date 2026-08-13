@@ -1,0 +1,82 @@
+# QLint, whole stack, one command: `docker compose up --build`.
+#
+# This is also the answer to the liboqs problem. The backend image compiles
+# liboqs at build time (see backend/Dockerfile), so the PQC Benchmark Lab works
+# here with no WSL, no native toolchain on the host, and nothing downloaded at
+# first request.
+
+services:
+  mongodb:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      # Named volume, so `docker compose down` (without -v) keeps every
+      # account, scan and cached explanation. Only `down -v` erases them.
+      - qlint-mongo-data:/data/db
+    # Deliberately not published to the host. QLint's own README has
+    # developers running MongoDB as a Windows service on 27017, and publishing
+    # here would either collide with that port or, worse, succeed and leave two
+    # databases in play. The backend reaches it over the compose network by
+    # service name, which needs no published port at all. To inspect it from
+    # the host, uncomment this in docker-compose.override.yml:
+    #   ports: ["27018:27017"]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        # Wait for Mongo to actually answer, not merely to have been created.
+        # The app survives a missing database (it degrades to anonymous
+        # scanning and prints a warning), but starting into that state on every
+        # `up` would make the warning meaningless.
+        condition: service_healthy
+    env_file:
+      # Your real secrets, never committed. Optional: the stack still comes up
+      # without this file -- scanning works unauthenticated, and the features
+      # that need a key report that they are unconfigured.
+      - path: ./backend/.env
+        required: false
+    environment:
+      # Overrides whatever backend/.env says, and it must. Inside the compose
+      # network "localhost" is the backend container itself, where nothing is
+      # listening on 27017; the database is another container, addressed by its
+      # service name. This one line is the difference between a working stack
+      # and the "could not reach MongoDB" warning on every start.
+      MONGODB_URI: mongodb://mongodb:27017
+    ports:
+      # Published because the frontend's API_BASE (frontend/src/api.js) is
+      # http://localhost:8000 -- the browser calls the backend directly from
+      # the host, not through the compose network.
+      - "8000:8000"
+    healthcheck:
+      # curl is not in python:3.13-slim, and the interpreter is right there.
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      # 5174 on the host to match the port the dev server is pinned to, so the
+      # GitHub OAuth app's callback URL and the backend's CORS allow-list keep
+      # working unchanged whether you run the stack with compose or with npm.
+      - "5174:80"
+
+volumes:
+  qlint-mongo-data:

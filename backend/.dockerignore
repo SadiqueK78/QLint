@@ -1,0 +1,30 @@
+# Everything here would either break the image or bloat it.
+
+# Windows-native virtualenv: wrong platform entirely, and the single largest
+# directory in the build context.
+.venv/
+venv/
+
+# Real secrets. The container gets its configuration from docker-compose.yml
+# (env_file / environment), never from a file baked into the image.
+.env
+
+# Bytecode compiled by a different interpreter on a different OS.
+__pycache__/
+**/__pycache__/
+*.py[cod]
+
+# Test and tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Not needed to run the service
+.git/
+.gitignore
+Dockerfile
+.dockerignore
+tests/
+*.md

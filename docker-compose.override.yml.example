@@ -1,0 +1,30 @@
+# Copy to docker-compose.override.yml to change the stack for your machine
+# only. Compose merges that file over docker-compose.yml automatically, and it
+# is gitignored, so nothing here reaches the repository.
+#
+#   cp docker-compose.override.yml.example docker-compose.override.yml
+#
+# Secrets do not belong here. Put them in backend/.env (start from
+# backend/.env.example); docker-compose.yml already loads that file into the
+# backend container, and it is gitignored too.
+
+services:
+  backend:
+    # Handy when you want a couple of values without maintaining a whole .env
+    # file. Anything set here wins over backend/.env.
+    environment:
+      OPENROUTER_API_KEY: sk-or-your-key-here
+      JWT_SECRET: any-long-random-string-for-local-use
+
+    # Live-reload against your working tree instead of the code baked into the
+    # image. Note that this shadows /app, so the container runs your host
+    # files -- liboqs still comes from the image and keeps working.
+    # volumes:
+    #   - ./backend:/app
+    # command: ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+  # Reach the database from Compass or mongosh on the host. 27018 avoids
+  # colliding with a MongoDB already installed on the host's 27017.
+  # mongodb:
+  #   ports:
+  #     - "27018:27017"
