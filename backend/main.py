@@ -23,6 +23,22 @@ load_dotenv()
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 SERVICE_NAME = "PQC Migration Scanner"
 
+# Browser origins allowed to call this API. 5174 is the port vite.config.js
+# pins; 5173 is Vite's default, kept so an unpinned dev server also works.
+ALLOWED_ORIGINS = ["http://localhost:5173", "http://localhost:5174"]
+
+# A deployed frontend is served from somewhere else, and it cannot be covered
+# by a "*" wildcard: allow_credentials=True below rules that out, so the origin
+# has to be listed explicitly. Reusing the variable oauth_router already reads
+# means one setting moves both the CORS allowance and the OAuth redirect.
+#
+# rstrip("/") because the browser's Origin header never carries a trailing
+# slash -- FRONTEND_URL="https://app.example.com/" would otherwise compare
+# unequal to "https://app.example.com" and silently fail every request.
+FRONTEND_URL = os.getenv("FRONTEND_URL", "").rstrip("/")
+if FRONTEND_URL and FRONTEND_URL not in ALLOWED_ORIGINS:
+    ALLOWED_ORIGINS.append(FRONTEND_URL)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -61,7 +77,7 @@ app = FastAPI(title=SERVICE_NAME, lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:5174"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
