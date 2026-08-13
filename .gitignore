@@ -11,8 +11,9 @@ backend/.env
 # Frontend
 frontend/node_modules/
 frontend/dist/
-# Per-machine Vite overrides. frontend/.env itself IS committed -- it is the
-# documented default and holds no secrets.
+# Per-machine Vite config, from frontend/.env.example. Listed file by file
+# rather than as frontend/.env* so the .example template stays tracked.
+frontend/.env
 frontend/.env.local
 frontend/.env.*.local
 

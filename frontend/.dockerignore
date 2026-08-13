@@ -6,6 +6,17 @@ node_modules/
 # shadow the fresh one.
 dist/
 
+# Per-machine Vite config. Kept out of the build context deliberately: Vite
+# inlines VITE_API_URL at build time, so a developer's local .env pointing at
+# some other backend would otherwise be baked into the shipped image. Builds
+# use the default in src/api.js unless VITE_API_URL is passed in explicitly.
+# (.env.example is harmless -- Vite never loads it -- but there is no reason
+# to ship it either.)
+.env
+.env.local
+.env.*.local
+.env.example
+
 .git/
 .gitignore
 Dockerfile

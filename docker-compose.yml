@@ -51,9 +51,15 @@ services:
       # and the "could not reach MongoDB" warning on every start.
       MONGODB_URI: mongodb://mongodb:27017
     ports:
-      # Published because the frontend's API_BASE (frontend/src/api.js) is
-      # http://localhost:8000 -- the browser calls the backend directly from
-      # the host, not through the compose network.
+      # Published because the frontend's API_BASE (frontend/src/api.js)
+      # resolves to http://localhost:8000 -- the browser calls the backend
+      # directly from the host, not through the compose network. That is the
+      # built-in default; the image build sees no frontend/.env, since that
+      # file is gitignored and excluded from the build context.
+      #
+      # To point the compose frontend elsewhere, VITE_API_URL has to be set at
+      # image *build* time (Vite inlines it), not as an environment: entry
+      # here -- that would be read at run time, too late to matter.
       - "8000:8000"
     healthcheck:
       # curl is not in python:3.13-slim, and the interpreter is right there.
