@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import { API_BASE } from "./api";
+import { ChevronIcon } from "./icons";
 
 const ITERATIONS = 50;
 
@@ -24,6 +25,43 @@ function rate(value) {
 function familyLabel(family) {
   return family === "classical" ? "Classical" : "Post-quantum";
 }
+
+// Collapsed by default: both blocks it wraps are reference material rather
+// than something a reader needs before pressing the button, and always-visible
+// prose was crowding out the numbers this page exists to show. Same
+// button-plus-chevron shape as the Help accordion, so a disclosure behaves the
+// same wherever it appears.
+function Disclosure({ label, children }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={`pqc-disclosure${open ? " pqc-disclosure-open" : ""}`}>
+      <button
+        className="pqc-disclosure-toggle"
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((prev) => !prev)}
+      >
+        <span className="pqc-disclosure-label">{label}</span>
+        <span
+          className={`pqc-disclosure-chevron${
+            open ? " pqc-disclosure-chevron-open" : ""
+          }`}
+        >
+          <ChevronIcon />
+        </span>
+      </button>
+      {open && <div className="pqc-disclosure-body">{children}</div>}
+    </div>
+  );
+}
+
+// One entry per NIST standard the page exercises, spelled out as full URLs so
+// the destination is visible before the click.
+const FIPS_LINKS = [
+  { label: "ML-KEM — FIPS 203", url: "https://csrc.nist.gov/pubs/fips/203/final" },
+  { label: "ML-DSA — FIPS 204", url: "https://csrc.nist.gov/pubs/fips/204/final" },
+  { label: "SLH-DSA — FIPS 205", url: "https://csrc.nist.gov/pubs/fips/205/final" },
+];
 
 // One algorithm failing does not take the run down, so it gets a row saying
 // what went wrong rather than being dropped from the table.
@@ -271,6 +309,19 @@ export default function PqcBenchmark() {
           signature size is measured from the bytes the algorithm actually
           produced. Nothing here is a published figure looked up from a table.
         </p>
+        <Disclosure label="Know more about these PQC algorithms">
+          {FIPS_LINKS.map((entry) => (
+            <a
+              className="pqc-disclosure-link"
+              key={entry.url}
+              href={entry.url}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              {entry.label}: {entry.url}
+            </a>
+          ))}
+        </Disclosure>
       </div>
 
       <div className="pqc-levels">
@@ -361,28 +412,35 @@ export default function PqcBenchmark() {
             />
           </div>
 
-          <p className="pqc-takeaway">
-            The post-quantum algorithms here are competitive on speed but carry
-            far larger keys and signatures than RSA and ECDSA, and that is the
-            trade: those bytes buy security believed to hold against a quantum
-            computer, which RSA and ECDSA will not.
-          </p>
+          {/* Takeaway, keygen caveat, and the backend's measurement notes used
+              to sit here as three always-visible paragraphs in two different
+              sizes. They are one collapsed block now, at one size: the reader
+              who wants to challenge a number opens it, everyone else sees the
+              tables. */}
+          <Disclosure label="Methodology notes">
+            <p className="pqc-method-text">
+              The post-quantum algorithms here are competitive on speed but
+              carry far larger keys and signatures than RSA and ECDSA, and that
+              is the trade: those bytes buy security believed to hold against a
+              quantum computer, which RSA and ECDSA will not.
+            </p>
 
-          {cappedKeygen && (
-            <p className="pqc-note">
-              {cappedKeygen.algorithm} key generation is measured over{" "}
-              {cappedKeygen.keygen_iterations} iterations rather than{" "}
-              {cappedKeygen.iterations}: it costs roughly a thousand times what
-              every other operation on this page costs, and running the full
-              count would dominate the wait. Signing and verification use the
-              full count.
-            </p>
-          )}
-          {notes.map((note) => (
-            <p className="pqc-note" key={note}>
-              {note}
-            </p>
-          ))}
+            {cappedKeygen && (
+              <p className="pqc-method-text">
+                {cappedKeygen.algorithm} key generation is measured over{" "}
+                {cappedKeygen.keygen_iterations} iterations rather than{" "}
+                {cappedKeygen.iterations}: it costs roughly a thousand times
+                what every other operation on this page costs, and running the
+                full count would dominate the wait. Signing and verification use
+                the full count.
+              </p>
+            )}
+            {notes.map((note) => (
+              <p className="pqc-method-text" key={note}>
+                {note}
+              </p>
+            ))}
+          </Disclosure>
         </div>
       )}
     </div>

@@ -2022,20 +2022,84 @@ input {
   white-space: normal;
 }
 
-.pqc-takeaway {
+/* Collapsed reference blocks: the FIPS links under the intro, and the
+   methodology notes under a finished run. */
+
+.pqc-disclosure {
   max-width: 780px;
-  margin: 28px 0 0;
-  font-size: 15px;
-  line-height: 1.7;
+  margin: 20px 0 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.pqc-disclosure-open {
+  background: var(--surface);
+}
+
+.pqc-disclosure-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 16px;
+  background: transparent;
+  border: none;
+  text-align: left;
+  cursor: pointer;
   color: var(--text-primary);
 }
 
-.pqc-note {
-  max-width: 780px;
-  margin: 12px 0 0;
-  font-size: 13px;
-  line-height: 1.6;
+.pqc-disclosure-toggle:hover {
+  background: var(--surface);
+}
+
+.pqc-disclosure-label {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.pqc-disclosure-open .pqc-disclosure-label {
+  font-weight: 600;
+}
+
+.pqc-disclosure-chevron {
+  display: inline-flex;
   color: var(--text-muted);
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+}
+
+.pqc-disclosure-chevron-open {
+  transform: rotate(180deg);
+  color: var(--text-secondary);
+}
+
+.pqc-disclosure-body {
+  padding: 0 16px 16px;
+}
+
+.pqc-disclosure-link {
+  display: block;
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--info);
+  word-break: break-word;
+}
+
+/* One size and weight for every paragraph in the methodology block: it used to
+   mix 15px body text with 13px muted notes, which read as three unrelated
+   asides rather than one section. */
+.pqc-method-text {
+  font-size: 15px;
+  line-height: 1.7;
+  font-weight: 400;
+  color: var(--text-secondary);
+  margin: 0 0 12px;
+}
+
+.pqc-method-text:last-child {
+  margin-bottom: 0;
 }
 
 /* Security level pickers. Shaped like the HNDL calculator's fields so the two
@@ -3614,6 +3678,32 @@ input {
   font-size: 13.5px;
   font-weight: 500;
   color: var(--info);
+}
+
+/* One repository per line: the language names the column, the full URL is the
+   clickable part so it can be read before it is followed. */
+.faq-repo-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.faq-repo {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.faq-repo-lang {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  min-width: 84px;
+}
+
+.faq-repo .faq-link {
+  word-break: break-word;
 }
 
 /* ----------------------------------------------------- benchmark lede */
