@@ -428,6 +428,14 @@ function Navbar({
           >
             Contribute
           </a>
+          {/* A top-level destination rather than an item in the profile menu:
+              the history is where a returning user goes first, and it was one
+              click deeper than every page they visit less often. Shown signed
+              out too -- the click routes to the login modal, which is more
+              use than a nav item that appears out of nowhere after sign-in. */}
+          <button className="nav-btn" type="button" onClick={onShowHistory}>
+            Scan History
+          </button>
           {/* Everything account-shaped lives behind this one icon. The bar
               used to carry the email, both GitHub connections, My Scans,
               Admin and Log out side by side -- more chrome than the three
@@ -516,14 +524,10 @@ function Navbar({
                       </button>
                     </div>
                     <div className="account-menu-sep" />
-                    <button
-                      className="account-menu-item"
-                      type="button"
-                      role="menuitem"
-                      onClick={fromAccountMenu(onShowHistory)}
-                    >
-                      My Scans
-                    </button>
+                    {/* Scan History used to sit here; it is a navbar item now.
+                        What is left in this menu is account state -- the two
+                        GitHub grants, Admin, and Log out -- rather than a
+                        destination competing with the top-level links. */}
                     {user.role === "admin" && (
                       <button
                         className="account-menu-item"
@@ -599,21 +603,23 @@ function Navbar({
         >
           Contribute
         </a>
+        {/* Kept in step with the navbar: same label, same position after
+            Contribute, and outside the signed-in block for the same reason. */}
+        <button
+          className="sidebar-item"
+          type="button"
+          onClick={() => {
+            closeSidebar();
+            onShowHistory();
+          }}
+        >
+          Scan History
+        </button>
         {user ? (
           <>
             <span className="sidebar-item" title={user.email}>
               {truncateEmail(user.email)}
             </span>
-            <button
-              className="sidebar-item"
-              type="button"
-              onClick={() => {
-                closeSidebar();
-                onShowHistory();
-              }}
-            >
-              My Scans
-            </button>
             {user.role === "admin" && (
               <button
                 className="sidebar-item"
@@ -764,11 +770,16 @@ function ScanInputCard({
   error,
   onClearError,
   user,
+  onLogin,
 }) {
   const rateTooLow = rateLimit != null && rateLimit.remaining < 100;
   // A connected GitHub account supplies the credential, so the manual token
   // field is redundant.
   const usingConnectedGithub = !!user?.github_connected;
+  // Scanning needs a session. The button stays enabled and says so instead of
+  // going grey: a disabled control with no explanation reads as a broken app,
+  // and the click has somewhere useful to go -- the login modal.
+  const signedOut = !user;
   return (
     <section className="scan-section" id="scan-input">
       <div className="scan-card">
@@ -798,11 +809,24 @@ function ScanInputCard({
             type="button"
             onClick={onScan}
             disabled={scanning || rateTooLow}
+            title={
+              signedOut ? "Sign in to scan a repository" : "Scan this repository"
+            }
           >
-            Scan Repository
+            {signedOut ? "Sign in to scan" : "Scan Repository"}
           </button>
         </div>
         {urlError && <p className="url-error">{urlError}</p>}
+        {signedOut && (
+          <p className="signin-note">
+            Scanning requires an account, so your reports are saved to your scan
+            history.{" "}
+            <button className="signin-note-link" type="button" onClick={onLogin}>
+              Sign in
+            </button>{" "}
+            to get started.
+          </p>
+        )}
         {usingConnectedGithub && (
           <p className="gh-using-note">
             Using your connected GitHub account for API access
@@ -3021,6 +3045,14 @@ export default function App() {
     setAuthView("none");
   };
 
+  // Both gated actions -- scanning and opening the history -- come through
+  // here, so a signed-out click always explains itself instead of opening the
+  // login modal for no stated reason.
+  const requireLogin = (message) => {
+    setAuthNotice(message);
+    openAuth("login");
+  };
+
   const submitAuth = async (mode, email, password) => {
     setAuthError(null);
     if (!email || !password) {
@@ -3058,6 +3090,9 @@ export default function App() {
       setAuthToken(data.access_token);
       setUser(data.user);
       setAuthView("none");
+      // Clears any "Sign in to scan a repository." banner that opened this
+      // modal: the reason it was shown no longer applies.
+      setAuthNotice(null);
     } catch {
       setAuthError(
         mode === "signup"
@@ -3281,6 +3316,13 @@ export default function App() {
   const handleScan = async (forceRefresh = false) => {
     setUrlError(null);
     setError(null);
+    // The backend 401s an unauthenticated /scan, so stop here rather than
+    // firing a request that cannot succeed: the login modal is this app's
+    // equivalent of a redirect to a sign-in page.
+    if (!authToken) {
+      requireLogin("Sign in to scan a repository.");
+      return;
+    }
     const trimmed = repoUrl.trim();
     if (!trimmed.startsWith("https://github.com/")) {
       setUrlError("Please enter a valid GitHub repository URL");
@@ -3313,6 +3355,17 @@ export default function App() {
       }
 
       const data = await res.json().catch(() => null);
+      // A token the backend no longer accepts: expired, or the account is
+      // gone. Drop it and ask for a new session rather than reporting the
+      // rejection as a failed scan.
+      if (res.status === 401) {
+        localStorage.removeItem(TOKEN_KEY);
+        setAuthToken(null);
+        setUser(null);
+        setView("input");
+        requireLogin("Your session has expired. Sign in again to scan.");
+        return;
+      }
       if (!res.ok) {
         const detail =
           data && typeof data.detail === "string" ? data.detail : null;
@@ -3401,7 +3454,16 @@ export default function App() {
         onLogin={() => openAuth("login")}
         onSignup={() => openAuth("signup")}
         onLogout={handleLogout}
-        onShowHistory={() => setShowHistory(true)}
+        onShowHistory={() => {
+          // The nav item is visible signed out, so this is where that click
+          // lands: the history is per-account and has nothing to show without
+          // a session.
+          if (!authToken) {
+            requireLogin("Sign in to see your scan history.");
+            return;
+          }
+          setShowHistory(true);
+        }}
         onShowAdmin={() => {
           setAdminUsersPage(1);
           setShowAdmin(true);
@@ -3446,6 +3508,7 @@ export default function App() {
                 scanning={false}
                 onScan={() => handleScan(false)}
                 user={user}
+                onLogin={() => requireLogin("Sign in to scan a repository.")}
                 error={error}
                 onClearError={() => setError(null)}
               />

@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from pymongo import DESCENDING
 from pymongo.errors import PyMongoError
 
-from auth import get_optional_user
+from auth import get_current_user
 from database import get_scans, get_users
 from github_client import (
     GitHubError,
@@ -119,21 +119,25 @@ async def _cache_lookup(repo_url: str) -> dict | None:
         return None  # cache is an optimization, never a hard dependency
 
 
-async def _cache_store(repo_url: str, result: dict, user: dict | None) -> str | None:
-    """Store the scan and return its id, or None if the write did not happen."""
+async def _cache_store(repo_url: str, result: dict, user: dict) -> str | None:
+    """Store the scan and return its id, or None if the write did not happen.
+
+    Every scan has an owner now that /scan requires a session, so the entry is
+    always attributed; older documents from the anonymous era keep their
+    "anonymous" scanned_by and null user_id, which the reads below still handle.
+    """
     now = datetime.now(timezone.utc)
     entry = {
         "repo_url": repo_url,
-        "scanned_by": user["email"] if user else "anonymous",
-        "user_id": str(user["_id"]) if user else None,
+        "scanned_by": user["email"],
+        "user_id": str(user["_id"]),
         "result": result,
         "created_at": now,
         "expires_at": now + timedelta(hours=SCAN_CACHE_TTL_HOURS),
     }
     try:
         inserted = await get_scans().insert_one(entry)
-        if user:
-            await get_users().update_one({"_id": user["_id"]}, {"$inc": {"scan_count": 1}})
+        await get_users().update_one({"_id": user["_id"]}, {"$inc": {"scan_count": 1}})
         return str(inserted.inserted_id)
     except PyMongoError:
         return None  # a failed cache write must not fail the scan
@@ -152,8 +156,8 @@ _FORMAT_PATTERN = "^(?:sarif|cbom)$"
 def _download_response(report: dict, repo_url: str, format: str) -> JSONResponse:
     """Render a report as a downloadable SARIF or CBOM file.
 
-    Named after the repo rather than a scan id: this path also serves anonymous
-    scans, which are stored without an owner and have no id to hand back.
+    Named after the repo rather than a scan id: a cache hit belonging to another
+    user, or a scan whose cache write failed, has no id to name the file with.
     """
     convert, extension = _DOWNLOAD_FORMATS[format]
     slug = repo_url.rstrip("/").rsplit("/", 2)[-2:]
@@ -172,7 +176,11 @@ def _download_response(report: dict, repo_url: str, format: str) -> JSONResponse
 async def scan(
     request: Request,
     body: ScanRequest,
-    user: dict | None = Depends(get_optional_user),
+    # Scanning is a signed-in action: it spends GitHub quota, can be pointed at
+    # a private repo through a caller-supplied token, and writes a row every
+    # admin aggregate counts. get_current_user 401s when the bearer token is
+    # missing, expired, or names a user that no longer exists.
+    user: dict = Depends(get_current_user),
     format: str | None = Query(
         default=None,
         pattern=_FORMAT_PATTERN,
@@ -202,8 +210,7 @@ async def scan(
             # still a valid cache hit, but handing back the id would put a scan
             # they hid back in front of them behind a link that 404s.
             if (
-                user
-                and cached.get("user_id") == str(user["_id"])
+                cached.get("user_id") == str(user["_id"])
                 and cached.get("deleted_at") is None
             ):
                 result["scan_id"] = str(cached["_id"])
@@ -241,14 +248,17 @@ async def scan(
     scan_id = await _cache_store(repo_url, report, user)
     if format:
         return _download_response(report, repo_url, format)
-    # Anonymous scans are stored without an owner, so their id resolves for
-    # nobody; leave it off rather than handing out one that always 404s.
-    if scan_id and user:
+    # None when the cache write failed (Mongo down): the scan itself succeeded,
+    # but there is no stored document for that id to resolve against.
+    if scan_id:
         report["scan_id"] = scan_id
     return report
 
 
-@router.post("/scan/preview")
+# Gated like /scan itself: the preview reads the repository's file tree from
+# GitHub, so leaving it open would hand out exactly the reconnaissance step the
+# scan gate exists to withhold.
+@router.post("/scan/preview", dependencies=[Depends(get_current_user)])
 async def scan_preview(request: Request, body: ScanRequest):
     token = _require_token()
     client = request.app.state.github
@@ -269,6 +279,9 @@ async def scan_preview(request: Request, body: ScanRequest):
     }
 
 
+# Deliberately left open, unlike the two routes above: it reads nothing about
+# any repository, only the server's own GitHub quota, and the landing page shows
+# it before anyone has signed in.
 @router.get("/scan/status")
 async def scan_status(request: Request):
     token = _require_token()

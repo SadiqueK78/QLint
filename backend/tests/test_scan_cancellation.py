@@ -18,12 +18,15 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import scanner_engine
+from auth import get_current_user
 from routers import scan_router as scan_module
 from routers.scan_router import CLIENT_CLOSED_REQUEST
 from routers.scan_router import router as scan_router
 from scanner_engine import CANCEL_CHECK_EVERY_FILES, ScanCancelled, _CancelWatch
 
 RSA_SOURCE = "from cryptography.hazmat.primitives.asymmetric import rsa\n"
+
+SCAN_USER = {"_id": "507f1f77bcf86cd799439011", "email": "owner@qlint.dev"}
 
 
 class FakeRepo:
@@ -152,8 +155,8 @@ class TestPollingIsRateLimited:
 
 
 @pytest.fixture
-def scan_client(monkeypatch):
-    """POST /scan over the real router, with GitHub and Mongo faked out.
+def scan_app(monkeypatch):
+    """The real scan router, with GitHub and Mongo faked out but no session.
 
     scan_repository is the real one, so the router's should_cancel wiring is
     genuinely exercised rather than stubbed.
@@ -167,7 +170,7 @@ def scan_client(monkeypatch):
         return None
 
     async def cache_store(repo_url, result, user):
-        stored.append({"repo_url": repo_url, "result": result})
+        stored.append({"repo_url": repo_url, "result": result, "user": user})
         return "652f1f77bcf86cd7994390a1"
 
     monkeypatch.setattr(scan_module, "_cache_lookup", cache_lookup)
@@ -176,7 +179,62 @@ def scan_client(monkeypatch):
     app = FastAPI()
     app.include_router(scan_router)
     app.state.github = None
-    return TestClient(app), stored, repo
+    return app, stored, repo
+
+
+@pytest.fixture
+def scan_client(scan_app):
+    """The same app, with every request authenticated: /scan now requires it."""
+    app, stored, repo = scan_app
+    app.dependency_overrides[get_current_user] = lambda: SCAN_USER
+    yield TestClient(app), stored, repo
+    app.dependency_overrides.clear()
+
+
+class TestTheRouterRequiresASession:
+    """Scanning is gated: no bearer token, no scan, and no work done.
+
+    The assertions on `repo` and `stored` are the point -- a 401 that arrived
+    after the repository had already been read would leak exactly what the gate
+    exists to withhold, and would spend the GitHub quota doing it.
+    """
+
+    def test_scan_without_a_token_is_401(self, scan_app):
+        app, stored, repo = scan_app
+        response = TestClient(app).post(
+            "/scan", json={"repo_url": "https://github.com/acme/demo"}
+        )
+        assert response.status_code == 401
+        assert response.json()["detail"] == "Not authenticated"
+        assert stored == []
+        assert repo.fetched == []
+
+    def test_scan_with_a_junk_token_is_401(self, scan_app):
+        app, stored, repo = scan_app
+        response = TestClient(app).post(
+            "/scan",
+            json={"repo_url": "https://github.com/acme/demo"},
+            headers={"Authorization": "Bearer not-a-real-jwt"},
+        )
+        assert response.status_code == 401
+        assert stored == []
+        assert repo.fetched == []
+
+    def test_preview_without_a_token_is_401(self, scan_app):
+        app, _, repo = scan_app
+        response = TestClient(app).post(
+            "/scan/preview", json={"repo_url": "https://github.com/acme/demo"}
+        )
+        assert response.status_code == 401
+        assert repo.fetched == []
+
+    def test_a_signed_in_scan_is_attributed_to_that_user(self, scan_client):
+        client, stored, _ = scan_client
+        response = client.post(
+            "/scan", json={"repo_url": "https://github.com/acme/demo"}
+        )
+        assert response.status_code == 200
+        assert stored[0]["user"] == SCAN_USER
 
 
 class TestTheRouterOnClientDisconnect:

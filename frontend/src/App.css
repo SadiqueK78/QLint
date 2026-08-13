@@ -465,6 +465,25 @@ input {
   display: block;
 }
 
+/* Shown under the scan row while signed out. Not an error colour: nothing has
+   gone wrong yet, this is the step before scanning. */
+.signin-note {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 10px 0 0;
+}
+
+.signin-note-link {
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: inherit;
+  font-weight: 600;
+  color: var(--info);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
 .token-toggle {
   border: 1px solid var(--border-strong);
   background: var(--surface);

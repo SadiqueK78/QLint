@@ -179,8 +179,9 @@ as Administrator).
 
 The `qlint` database and its indexes are created automatically on first
 startup — no manual setup needed. If MongoDB is unreachable the API still
-starts and anonymous scanning keeps working; accounts, history, and caching are
-disabled until it comes back.
+starts, but scanning needs a signed-in session and sessions are looked up in
+MongoDB, so `/scan` is unavailable until it comes back. The CLI never touches
+the database and keeps working regardless.
 
 ### GitHub Token
 
@@ -272,8 +273,9 @@ tracks progress against.
 # CLI
 python backend/qlint_cli.py --path . --format cbom --output qlint-cbom.json
 
-# API, anonymous
+# API (scanning requires a session)
 curl -X POST "http://localhost:8000/scan?format=cbom" \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"repo_url": "https://github.com/owner/repo"}'
 
@@ -366,14 +368,18 @@ push and pull request.
 | ------ | --------------- | ------------------------ | ---------------------------------------------------------- |
 | GET    | `/health`       | Health check             | Returns `{"status": "ok", "service": "PQC Migration Scanner"}` |
 | GET    | `/scan/status`  | GitHub rate limit        | Returns remaining requests + reset time                    |
-| POST   | `/scan/preview` | List scannable source files | Body: `{"repo_url": "https://github.com/owner/repo"}`   |
-| POST   | `/scan`         | Full vulnerability scan  | Body: `{"repo_url": "https://github.com/owner/repo", "force_refresh": false}` |
+| POST   | `/scan/preview` | List scannable source files (JWT) | Body: `{"repo_url": "https://github.com/owner/repo"}`   |
+| POST   | `/scan`         | Full vulnerability scan (JWT) | Body: `{"repo_url": "https://github.com/owner/repo", "force_refresh": false}` |
 | POST   | `/scan/explain` | Explain one finding in plain English (AI) | Body: a finding object from a scan report |
 | POST   | `/scan/patch`   | Generate a migration patch for one finding (AI) | Body: a finding object; `code_snippet` and `fix_snippet` required |
 
-Authentication is **optional** on `/scan`. Anonymous scans work as before; send
-`Authorization: Bearer <token>` to attribute the scan to an account and have it
-appear in that user's history.
+Authentication is **required** on `/scan` and `/scan/preview`: both return `401`
+without a valid `Authorization: Bearer <token>`. Every scan is therefore
+attributed to an account and appears in that user's history. `/scan/status` stays
+open — it reports the server's own GitHub quota and nothing about any repository.
+
+To scan without an account, use the CLI (`backend/qlint_cli.py`) or the GitHub
+Action, neither of which goes through the API.
 
 ### AI Explanations
 
