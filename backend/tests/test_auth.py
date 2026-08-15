@@ -1,17 +1,22 @@
 """Unit tests for password hashing, JWT handling, and the auth models.
 
-These cover the pure functions only — the routes are exercised against a live
-MongoDB, which the rest of the suite deliberately does not require.
+These cover the pure functions only — the session routes are exercised against
+a live MongoDB, which the rest of the suite deliberately does not require. The
+one exception is the retired email/password pair at the bottom, which reaches
+no database by design and so can be tested outright.
 """
 
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from jose import jwt
 from pydantic import ValidationError
 
 import auth
 from models import UserRegister, UserResponse, user_to_response
+from routers.auth_router import DISCONTINUED, router as auth_router
 
 
 def test_hash_password_is_salted_and_verifiable():
@@ -99,3 +104,95 @@ def test_user_to_response_tags_naive_timestamps_as_utc():
     assert isinstance(response, UserResponse)
     assert response.created_at == "2026-07-19T22:32:00+00:00"
     assert response.scan_count == 3
+
+
+# ------------------------------------------- retired email/password endpoints
+
+
+@pytest.fixture
+def auth_client():
+    """The auth router alone. No database is wired up on purpose.
+
+    Nothing these two routes do can reach Mongo any more, and a fixture that
+    provided one would hide a regression where they started trying to.
+    """
+    app = FastAPI()
+    app.include_router(auth_router)
+    return TestClient(app)
+
+
+class TestEmailPasswordIsRetired:
+    """Both routes answer 410 Gone and do nothing else.
+
+    They stay mounted only because the frontend deploys separately: a browser
+    still running the previous bundle can post here after this ships, and it
+    should get an explanation rather than a bare 404 from an unknown route.
+    """
+
+    @pytest.mark.parametrize("path", ["/auth/register", "/auth/login"])
+    def test_the_route_is_gone_not_missing(self, auth_client, path):
+        response = auth_client.post(
+            path, json={"email": "a@b.dev", "password": "longenough"}
+        )
+        assert response.status_code == 410
+        assert response.json()["detail"] == DISCONTINUED
+
+    @pytest.mark.parametrize("path", ["/auth/register", "/auth/login"])
+    def test_the_message_points_at_github(self, auth_client, path):
+        detail = auth_client.post(path, json={}).json()["detail"]
+        assert "discontinued" in detail.lower()
+        assert "GitHub" in detail
+
+    @pytest.mark.parametrize("path", ["/auth/register", "/auth/login"])
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {},
+            {"email": "a@b.dev"},
+            {"email": "not-an-email", "password": "x"},
+            {"email": "a@b.dev", "password": "short"},
+            {"unexpected": "shape"},
+        ],
+    )
+    def test_any_body_gets_the_same_answer(self, auth_client, path, payload):
+        """Including bodies the old models would have rejected with a 422.
+
+        An old frontend posting a seven-character password must be told the
+        feature is gone, not told about a password length rule that no longer
+        exists anywhere.
+        """
+        response = auth_client.post(path, json=payload)
+        assert response.status_code == 410
+        assert response.json()["detail"] == DISCONTINUED
+
+    @pytest.mark.parametrize("path", ["/auth/register", "/auth/login"])
+    def test_no_token_is_ever_issued(self, auth_client, path):
+        """The old routes answered with a session. These must not."""
+        body = auth_client.post(
+            path, json={"email": "a@b.dev", "password": "longenough"}
+        ).json()
+        assert "access_token" not in body
+        assert "user" not in body
+
+    def test_the_routes_no_longer_touch_the_database(self, auth_client, monkeypatch):
+        """A stub that still called Mongo would fail closed on a cold start."""
+        import routers.auth_router as module
+
+        def explode():
+            raise AssertionError("the retired routes must not reach the database")
+
+        # get_users is no longer imported here at all; this asserts that, and
+        # catches a re-import that quietly brings the old behaviour back.
+        assert not hasattr(module, "get_users")
+        monkeypatch.setattr(module, "get_users", explode, raising=False)
+        assert auth_client.post("/auth/login", json={}).status_code == 410
+
+    def test_the_session_routes_are_untouched(self, auth_client):
+        """GitHub OAuth issues the JWT; /auth/me and /auth/logout still serve it.
+
+        Without a bearer token both answer 401, which is the same behaviour
+        they had before -- what matters is that they are still mounted and are
+        not part of the retirement.
+        """
+        assert auth_client.get("/auth/me").status_code == 401
+        assert auth_client.post("/auth/logout").status_code == 401

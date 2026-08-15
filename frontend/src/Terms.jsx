@@ -30,8 +30,9 @@ export default function Terms() {
       <section className="doc-section">
         <h2 className="doc-heading">The service is free and provided as-is</h2>
         <p className="doc-text">
-          QLint costs nothing to use and carries no paid tiers. Scanning does
-          not require an account. Because it is free and offered as-is, we make
+          QLint costs nothing to use and carries no paid tiers. Scanning needs
+          an account, which you create by signing in with GitHub. Because it is
+          free and offered as-is, we make
           no promise that it will be available, that a scan will succeed, or
           that your saved data will survive indefinitely. Features may change or
           be removed. We may take the service down without notice.

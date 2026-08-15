@@ -2498,45 +2498,9 @@ input {
   margin: 4px 0 0;
 }
 
-.auth-field {
-  margin-top: 20px;
-}
-
-.auth-label {
-  display: block;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-secondary);
-  margin-bottom: 6px;
-}
-
-.auth-input {
-  width: 100%;
-  height: 44px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
-  padding: 0 14px;
-  font-size: 14px;
-  color: var(--text-primary);
-  background: var(--surface);
-  outline: none;
-}
-
-.auth-input::placeholder {
-  color: var(--text-muted);
-}
-
-.auth-input:focus {
-  border-color: var(--navy);
-  box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.08);
-}
-
-.auth-hint {
-  font-size: 12px;
-  color: var(--text-muted);
-  margin: 6px 0 0;
-}
-
+/* .auth-error is still in use: the pull request consent modal reports its
+   failures with it. The email/password field, submit, and divider styles that
+   used to sit around it went with the form itself. */
 .auth-error {
   font-size: 13px;
   color: var(--critical);
@@ -2546,39 +2510,11 @@ input {
   border-radius: var(--radius);
 }
 
-.auth-submit {
-  width: 100%;
-  height: 44px;
-  background: var(--navy);
-  color: #ffffff;
-  border: none;
-  border-radius: var(--radius);
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  margin-top: 16px;
-}
-
-.auth-submit:hover:not(:disabled) {
-  background: var(--navy-hover);
-}
-
-.auth-submit:disabled {
-  opacity: 0.7;
-  cursor: default;
-}
-
 .auth-switch {
   font-size: 13px;
   color: var(--text-secondary);
   text-align: center;
   margin: 16px 0 0;
-}
-
-.auth-switch-action {
-  color: var(--info);
-  cursor: pointer;
-  font-weight: 500;
 }
 
 /* ---------------------------------------------------------- cached result */
@@ -2719,24 +2655,6 @@ input {
 }
 
 /* ---------------------------------------------------------- dark overrides */
-
-[data-theme="dark"] .auth-submit {
-  background: #ffffff;
-  color: var(--navy);
-}
-
-[data-theme="dark"] .auth-submit:hover:not(:disabled) {
-  background: #e2e8f0;
-}
-
-[data-theme="dark"] .auth-input:focus {
-  border-color: #00ff41;
-  box-shadow: 0 0 0 3px rgba(0, 255, 65, 0.12);
-}
-
-[data-theme="dark"] .auth-switch-action {
-  color: var(--info);
-}
 
 [data-theme="dark"] .history-card,
 [data-theme="dark"] .auth-modal {
@@ -3074,33 +2992,11 @@ input {
   margin: 10px 0 0;
 }
 
-/* auth modal: divider + github button */
-
-.auth-divider {
-  position: relative;
-  text-align: center;
-  margin: 20px 0 16px;
-}
-
-.auth-divider::before {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: 0;
-  right: 0;
-  height: 1px;
-  background: var(--border);
-}
-
-.auth-divider-text {
-  position: relative;
-  padding: 0 12px;
-  background: var(--surface);
-  font-size: 13px;
-  color: var(--text-muted);
-}
+/* sign-in modal: the GitHub button. The "or" divider above it went with the
+   email/password form -- there is nothing left to divide it from. */
 
 .auth-github-btn {
+  margin-top: 20px;
   width: 100%;
   height: 44px;
   border: 1px solid var(--border-strong);

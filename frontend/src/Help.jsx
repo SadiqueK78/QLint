@@ -32,7 +32,7 @@ const FAQ = [
     q: "What does signing in unlock?",
     a: [
       "Scanning itself, first of all: a scan spends GitHub API quota and writes a stored report, so it runs against an account rather than anonymously. Every scan you run is then saved under your name, which is what My Scans lists and what the HNDL Risk Calculator scores.",
-      "Signing in with GitHub also supplies the API credential automatically, so you no longer need to paste a personal access token, and it is the connection the SARIF, CBOM, and SBOM downloads are served against. Creating pull requests needs a second, separate grant on top of it.",
+      "Signing in is GitHub only — there is no separate QLint password to create or remember, and continuing with GitHub the first time is what creates your account. It also supplies the API credential automatically, so you no longer need to paste a personal access token, and it is the connection the SARIF, CBOM, and SBOM downloads are served against. Creating pull requests needs a second, separate grant on top of it.",
     ],
   },
   {

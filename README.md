@@ -28,7 +28,7 @@ One-click PR creation: the flagship feature applies AI-generated patches directl
 
 - Backend: Python 3.13, FastAPI, httpx
 - Database: MongoDB (Motor async driver)
-- Auth: JWT (python-jose) + bcrypt password hashing (passlib), plus GitHub OAuth
+- Auth: GitHub OAuth only, with a JWT session (python-jose)
 - Frontend: React 18, Vite
 - Scanners: Python ast module; context-aware pattern matching for JS/TS/Go/Java/Rust
 - Output: SARIF 2.1.0, CycloneDX 1.6 CBOM, CycloneDX 1.6 SBOM, native JSON
@@ -46,7 +46,7 @@ QLint/
 ├── backend/
 │   ├── main.py                  (FastAPI app + router wiring)
 │   ├── database.py              (Motor client, indexes)
-│   ├── auth.py                  (JWT, password hashing, current-user deps)
+│   ├── auth.py                  (JWT issuing/decoding, current-user deps)
 │   ├── routers/                 (one router per feature area)
 │   ├── ast_scanner.py           (Python, AST-based)
 │   ├── js_scanner.py            (JavaScript / TypeScript)

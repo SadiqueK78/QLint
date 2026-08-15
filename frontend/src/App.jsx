@@ -344,8 +344,7 @@ function Navbar({
   onToggleTheme,
   onGoHome,
   user,
-  onLogin,
-  onSignup,
+  onSignIn,
   onLogout,
   onShowHistory,
   onShowAdmin,
@@ -548,24 +547,17 @@ function Navbar({
                     </button>
                   </>
                 ) : (
-                  <>
-                    <button
-                      className="account-menu-item"
-                      type="button"
-                      role="menuitem"
-                      onClick={fromAccountMenu(onLogin)}
-                    >
-                      Log in
-                    </button>
-                    <button
-                      className="account-menu-item"
-                      type="button"
-                      role="menuitem"
-                      onClick={fromAccountMenu(onSignup)}
-                    >
-                      Sign up
-                    </button>
-                  </>
+                  // One entry point, not a Log in / Sign up pair: GitHub OAuth
+                  // creates the account on first use and signs in on every use
+                  // after, so there is no second door to offer.
+                  <button
+                    className="account-menu-item"
+                    type="button"
+                    role="menuitem"
+                    onClick={fromAccountMenu(onSignIn)}
+                  >
+                    Sign in with GitHub
+                  </button>
                 )}
               </div>
             )}
@@ -673,28 +665,16 @@ function Navbar({
             </button>
           </>
         ) : (
-          <>
-            <button
-              className="sidebar-item"
-              type="button"
-              onClick={() => {
-                closeSidebar();
-                onLogin();
-              }}
-            >
-              Log in
-            </button>
-            <button
-              className="sidebar-item"
-              type="button"
-              onClick={() => {
-                closeSidebar();
-                onSignup();
-              }}
-            >
-              Sign up
-            </button>
-          </>
+          <button
+            className="sidebar-item"
+            type="button"
+            onClick={() => {
+              closeSidebar();
+              onSignIn();
+            }}
+          >
+            Sign in with GitHub
+          </button>
         )}
       </nav>
     </header>
@@ -770,7 +750,7 @@ function ScanInputCard({
   error,
   onClearError,
   user,
-  onLogin,
+  onSignIn,
 }) {
   const rateTooLow = rateLimit != null && rateLimit.remaining < 100;
   // A connected GitHub account supplies the credential, so the manual token
@@ -821,8 +801,8 @@ function ScanInputCard({
           <p className="signin-note">
             Scanning requires an account, so your reports are saved to your scan
             history.{" "}
-            <button className="signin-note-link" type="button" onClick={onLogin}>
-              Sign in
+            <button className="signin-note-link" type="button" onClick={onSignIn}>
+              Sign in with GitHub
             </button>{" "}
             to get started.
           </p>
@@ -2380,16 +2360,17 @@ function ResultsView({
   );
 }
 
-function AuthModal({ mode, loading, error, onSubmit, onClose, onSwitch }) {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const isSignup = mode === "signup";
-
-  const submit = () => {
-    if (loading) return;
-    onSubmit(email.trim(), password);
-  };
-
+// GitHub is the only way into QLint, so this is one button and an
+// explanation rather than a form. It is still a modal rather than a straight
+// redirect on click: a gated action sets an authNotice saying why sign-in is
+// being asked for ("Sign in to scan a repository."), and bouncing the browser
+// to github.com the instant someone presses Scan would take them off the site
+// before they had read it. The click here is the deliberate one.
+//
+// There is no signup/login distinction to make. GitHub OAuth creates the
+// account on first use and signs in on every use after, so a "Sign up" path
+// would be the same button under a different heading.
+function SignInModal({ onClose }) {
   return (
     <div
       className="modal-overlay"
@@ -2406,66 +2387,12 @@ function AuthModal({ mode, loading, error, onSubmit, onClose, onSwitch }) {
         >
           <CloseIcon size={16} />
         </button>
-        <div className="auth-title">
-          {isSignup ? "Create account" : "Welcome back"}
-        </div>
+        <div className="auth-title">Sign in to QLint</div>
         <p className="auth-sub">
-          {isSignup
-            ? "Start scanning for quantum vulnerabilities"
-            : "Sign in to your QLint account"}
+          QLint uses your GitHub account to sign in. It reads public repository
+          contents to scan them, and nothing else: opening a pull request needs
+          a separate permission you grant later, from the results screen.
         </p>
-
-        <div className="auth-field">
-          <label className="auth-label" htmlFor="auth-email">
-            Email
-          </label>
-          <input
-            id="auth-email"
-            className="auth-input"
-            type="email"
-            autoComplete="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") submit();
-            }}
-            placeholder="you@example.com"
-          />
-        </div>
-
-        <div className="auth-field">
-          <label className="auth-label" htmlFor="auth-password">
-            Password
-          </label>
-          <input
-            id="auth-password"
-            className="auth-input"
-            type="password"
-            autoComplete={isSignup ? "new-password" : "current-password"}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") submit();
-            }}
-            placeholder="********"
-          />
-          {isSignup && <p className="auth-hint">Minimum 8 characters</p>}
-        </div>
-
-        {error && <div className="auth-error">{error}</div>}
-
-        <button
-          className="auth-submit"
-          type="button"
-          onClick={submit}
-          disabled={loading}
-        >
-          {loading ? "Please wait..." : isSignup ? "Create account" : "Log in"}
-        </button>
-
-        <div className="auth-divider">
-          <span className="auth-divider-text">or</span>
-        </div>
 
         <button
           className="auth-github-btn"
@@ -2477,10 +2404,7 @@ function AuthModal({ mode, loading, error, onSubmit, onClose, onSwitch }) {
         </button>
 
         <p className="auth-switch">
-          {isSignup ? "Already have an account? " : "Don't have an account? "}
-          <span className="auth-switch-action" onClick={onSwitch}>
-            {isSignup ? "Log in" : "Sign up"}
-          </span>
+          First time here? Continuing with GitHub creates your QLint account.
         </p>
       </div>
     </div>
@@ -2894,9 +2818,7 @@ export default function App() {
 
   const [user, setUser] = useState(null);
   const [authToken, setAuthToken] = useState(null);
-  const [authView, setAuthView] = useState("none");
-  const [authLoading, setAuthLoading] = useState(false);
-  const [authError, setAuthError] = useState(null);
+  const [showSignIn, setShowSignIn] = useState(false);
   const [userScans, setUserScans] = useState([]);
   const [showHistory, setShowHistory] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -3074,73 +2996,15 @@ export default function App() {
   const toggleTheme = () =>
     setTheme((prev) => (prev === "light" ? "dark" : "light"));
 
-  const openAuth = (mode) => {
-    setAuthError(null);
-    setAuthView(mode);
-  };
-
-  const closeAuth = () => {
-    setAuthError(null);
-    setAuthView("none");
-  };
+  const openSignIn = () => setShowSignIn(true);
+  const closeSignIn = () => setShowSignIn(false);
 
   // Both gated actions -- scanning and opening the history -- come through
   // here, so a signed-out click always explains itself instead of opening the
-  // login modal for no stated reason.
+  // sign-in modal for no stated reason.
   const requireLogin = (message) => {
     setAuthNotice(message);
-    openAuth("login");
-  };
-
-  const submitAuth = async (mode, email, password) => {
-    setAuthError(null);
-    if (!email || !password) {
-      setAuthError("Email and password are required.");
-      return;
-    }
-    if (mode === "signup" && password.length < 8) {
-      setAuthError("Password must be at least 8 characters.");
-      return;
-    }
-    setAuthLoading(true);
-    try {
-      const path = mode === "signup" ? "/auth/register" : "/auth/login";
-      const res = await fetch(`${API_BASE}${path}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
-      if (!res.ok) {
-        if (mode === "signup" && res.status === 409) {
-          setAuthError("Email already registered");
-        } else if (mode === "login" && res.status === 401) {
-          setAuthError("Invalid email or password");
-        } else {
-          setAuthError(
-            mode === "signup"
-              ? "Signup failed. Try again."
-              : "Login failed. Try again."
-          );
-        }
-        return;
-      }
-      const data = await res.json();
-      localStorage.setItem(TOKEN_KEY, data.access_token);
-      setAuthToken(data.access_token);
-      setUser(data.user);
-      setAuthView("none");
-      // Clears any "Sign in to scan a repository." banner that opened this
-      // modal: the reason it was shown no longer applies.
-      setAuthNotice(null);
-    } catch {
-      setAuthError(
-        mode === "signup"
-          ? "Signup failed. Try again."
-          : "Login failed. Try again."
-      );
-    } finally {
-      setAuthLoading(false);
-    }
+    openSignIn();
   };
 
   const handleLogout = () => {
@@ -3490,8 +3354,7 @@ export default function App() {
         theme={theme}
         onToggleTheme={toggleTheme}
         user={user}
-        onLogin={() => openAuth("login")}
-        onSignup={() => openAuth("signup")}
+        onSignIn={openSignIn}
         onLogout={handleLogout}
         onShowHistory={() => {
           // The nav item is visible signed out, so this is where that click
@@ -3547,7 +3410,7 @@ export default function App() {
                 scanning={false}
                 onScan={() => handleScan(false)}
                 user={user}
-                onLogin={() => requireLogin("Sign in to scan a repository.")}
+                onSignIn={() => requireLogin("Sign in to scan a repository.")}
                 error={error}
                 onClearError={() => setError(null)}
               />
@@ -3578,21 +3441,7 @@ export default function App() {
         </main>
       </div>
       <Footer onNavigate={navigate} />
-      {authView !== "none" && (
-        <AuthModal
-          mode={authView}
-          loading={authLoading}
-          error={authError}
-          onClose={closeAuth}
-          onSubmit={(email, password) =>
-            submitAuth(authView, email, password)
-          }
-          onSwitch={() => {
-            setAuthError(null);
-            setAuthView(authView === "signup" ? "login" : "signup");
-          }}
-        />
-      )}
+      {showSignIn && <SignInModal onClose={closeSignIn} />}
       {showHistory && (
         <HistoryPanel
           scans={userScans}

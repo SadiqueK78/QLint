@@ -31,9 +31,8 @@ export default function Privacy() {
           access token GitHub issues us. That token is what lets QLint scan
           private repositories on your behalf without you pasting a personal
           access token; you can revoke it at any time with Disconnect in the
-          navbar, or from your GitHub account settings. Signing in with an email
-          and password stores the email and a bcrypt hash of the password. We
-          never store a password in readable form.
+          navbar, or from your GitHub account settings. GitHub is the only way
+          to sign in, so QLint never asks for, receives, or stores a password.
         </p>
         <p className="doc-text">
           Scan reports created while you are signed in are saved against your
@@ -44,16 +43,21 @@ export default function Privacy() {
       </section>
 
       <section className="doc-section">
-        <h2 className="doc-heading">If you are not signed in</h2>
+        <h2 className="doc-heading">The shared results cache</h2>
         <p className="doc-text">
-          Anonymous scans are not linked to any account and produce no user
-          record. The resulting report is still written to a shared results
-          cache, recorded against the repository URL and the label
-          &quot;anonymous&quot;, so that scanning the same public repository
-          again does not spend GitHub API quota repeating work. Cached reports
-          expire automatically 24 hours after they are created. Since a scan
-          only ever covers a repository you gave us the URL for, nothing in that
-          cache identifies you.
+          Every scan report is also written to a results cache recorded against
+          the repository URL, so that scanning the same public repository again
+          does not spend GitHub API quota repeating work. That cache is shared
+          across accounts: a report you were served may have been produced by
+          somebody else&apos;s scan of the same public repository, and yours may
+          be served to them. Cached reports expire automatically 24 hours after
+          they are created. Since a scan only ever covers a repository whose URL
+          was given to us, nothing in the cache is about you rather than about
+          the repository.
+        </p>
+        <p className="doc-text">
+          Reports created before scanning required an account are still labelled
+          &quot;anonymous&quot; and are not linked to anyone.
         </p>
       </section>
 
