@@ -1,0 +1,52 @@
+name: Docker Build
+
+# Render builds these same two Dockerfiles on every push to main and deploys
+# whatever comes out. This workflow builds them first, so a Dockerfile that
+# cannot build shows up as a failed check on the commit rather than as a failed
+# deploy minutes later.
+#
+# Build validation only. Nothing here pushes an image to a registry, tags a
+# release, or calls a deploy hook -- Render remains the only thing that deploys
+# QLint, exactly as before. Both images are discarded with the runner.
+#
+# Two jobs rather than one matrixed job, deliberately. They run in parallel, so
+# the fast frontend build reports in a minute instead of queueing behind the
+# backend's liboqs compile, and each appears as its own check on the commit --
+# "Build backend image" failing tells you where to look without opening a log.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Build backend image
+    runs-on: ubuntu-latest
+    # Generous, because this build compiles liboqs from source, which is
+    # minutes of work on a cold runner. Bounded, because a build that has hung
+    # should fail with a clear reason rather than run to the account-wide
+    # ceiling.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: docker build ./backend
+        run: docker build -t qlint-backend ./backend
+
+  frontend:
+    name: Build frontend image
+    runs-on: ubuntu-latest
+    # npm ci plus a vite build, then a copy into nginx. Nothing here is slow,
+    # so a tighter bound is still generous.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # No build arguments: the image deliberately bakes in the default API
+      # URL from src/api.js unless VITE_API_URL is passed, and .env is kept out
+      # of the build context. So this builds the same way here as on Render,
+      # with no secrets involved.
+      - name: docker build ./frontend
+        run: docker build -t qlint-frontend ./frontend

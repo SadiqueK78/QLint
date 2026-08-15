@@ -1183,6 +1183,116 @@ class TestRealStalenessStillDetected:
 # ------------------------------------------------------------ rate limiting
 
 
+class TestRateLimitIsPerAccount:
+    """The bucket is the signed-in account, not the address it arrives from.
+
+    Keyed on the address, this limit was global in production and nobody could
+    see it from the code: the deployed backend sits behind a proxy that
+    terminates TLS and forwards over its own network, so every visitor reaches
+    the app from one internal address and three pull requests an hour was the
+    budget for the entire site. The tests below pin both halves of the fix --
+    two accounts do not share a bucket, and one account does not get a fresh
+    one by arriving from somewhere else.
+    """
+
+    @staticmethod
+    def _client_from(client, host: str) -> TestClient:
+        """Another client onto the same app, arriving from a different address.
+
+        The address is rewritten in the ASGI scope, which is the same place
+        uvicorn writes it from the socket -- so this exercises exactly what
+        client_key used to read. Dependency overrides live on the wrapped
+        FastAPI app, so whoever is signed in stays signed in.
+        """
+
+        class FromAddress:
+            def __init__(self, app):
+                self.app = app
+
+            async def __call__(self, scope, receive, send):
+                if scope["type"] == "http":
+                    scope = {**scope, "client": (host, 41234)}
+                await self.app(scope, receive, send)
+
+        return TestClient(FromAddress(client.app))
+
+    def test_two_accounts_each_get_their_own_allowance(
+        self, client, github, generator, patch_cache, scan_owner
+    ):
+        limit = module._limiter.max_requests
+        second = {**USER, "_id": "user-2", "email": "second@example.com"}
+
+        for _ in range(limit):
+            assert create(client).status_code == 200
+        assert create(client).status_code == 429
+
+        # A different account, same everything else. Its own full allowance.
+        scan_owner["owner_id"] = second["_id"]
+        client.sign_in_as(second)
+        for _ in range(limit):
+            assert create(client).status_code == 200
+        assert create(client).status_code == 429
+
+        # Both accounts really did create pull requests: 2 x limit, not limit.
+        assert len(github.pulls) == 2 * limit
+
+    def test_one_account_exhausting_its_window_does_not_block_another(
+        self, client, github, generator, patch_cache, scan_owner
+    ):
+        """The production symptom, inverted: the fourth user of the day works."""
+        for _ in range(module._limiter.max_requests):
+            create(client)
+        assert create(client).status_code == 429
+
+        second = {**USER, "_id": "user-2", "email": "second@example.com"}
+        scan_owner["owner_id"] = second["_id"]
+        client.sign_in_as(second)
+        assert create(client).status_code == 200
+
+    def test_one_account_shares_one_bucket_across_addresses(
+        self, client, github, generator, patch_cache, scan_owner
+    ):
+        """The other half: the address must not buy a fresh allowance.
+
+        Every request here is the same account arriving from a different IP,
+        which under the old keying was a brand new bucket each time and is now
+        the same one.
+        """
+        limit = module._limiter.max_requests
+        addresses = ["203.0.113.1", "203.0.113.2", "203.0.113.3", "198.51.100.9"]
+        clients = [self._client_from(client, host) for host in addresses]
+
+        for index in range(limit):
+            response = create(clients[index])
+            assert response.status_code == 200, f"request {index + 1} from a new IP"
+
+        # A fourth address, still the same account, still over the limit.
+        assert create(clients[limit]).status_code == 429
+        assert len(github.pulls) == limit
+
+    def test_the_window_is_keyed_on_the_account_id(
+        self, client, github, generator, patch_cache, scan_owner
+    ):
+        """Asserted on the key itself, so the intent cannot drift silently."""
+        create(self._client_from(client, "203.0.113.7"))
+        assert list(module._limiter._hits) == [f"user:{USER['_id']}"]
+
+    def test_an_unauthenticated_request_spends_nobody_s_allowance(
+        self, client, github, generator, patch_cache, scan_owner
+    ):
+        """401 before the window is touched.
+
+        Under address keying an unauthenticated flood consumed the bucket that
+        real users shared. Now there is no bucket to consume until the caller
+        proves who they are.
+        """
+        client.app.dependency_overrides.clear()
+        response = create(client)
+        assert response.status_code == 401
+        assert module._limiter._hits == {}
+        assert github.pulls == []
+
+
 class TestRateLimit:
     def test_requests_beyond_the_window_are_rejected_with_429(
         self, client, github, generator, patch_cache, scan_owner

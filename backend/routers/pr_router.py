@@ -70,7 +70,7 @@ from patch_applier import (
 )
 from patch_generator import PatchGeneratorError, generate_patch, grounding_excerpt
 from pr_body_formatter import format_commit_message, format_pr_body
-from rate_limit import RateLimiter, rate_limit
+from rate_limit import RateLimiter, rate_limit_by_user
 from routers.oauth_router import WRITE_CONNECTED_FIELD, WRITE_TOKEN_FIELD
 from routers.patch_router import FindingPatchRequest, _cache_key
 from routers.user_router import _owned_scan
@@ -86,6 +86,14 @@ router = APIRouter()
 # repository full of junk pull requests somebody has to close by hand. Three
 # per hour is enough to create a pull request, notice a mistake, and try
 # again, and not enough to make a mess with.
+#
+# Counted per account, not per address. This route already requires a session,
+# so the stronger identity is available for free -- and the address is not
+# merely weaker here, it is useless: the deployed backend sits behind a proxy
+# that terminates TLS and forwards over its own network, so every visitor
+# arrives from the same internal address. Keyed on that, "three per hour"
+# meant three per hour for the entire site, and the fourth user of the day to
+# press the button was told to wait an hour for something they had never done.
 _limiter = RateLimiter(max_requests=3, window_seconds=3600)
 
 # Above this the pull request stops being reviewable, and the endpoint would
@@ -436,7 +444,7 @@ async def _commit_and_open_pr(
 
 
 @router.post(
-    "/scan/{scan_id}/create-pr", dependencies=[Depends(rate_limit(_limiter))]
+    "/scan/{scan_id}/create-pr", dependencies=[Depends(rate_limit_by_user(_limiter))]
 )
 async def create_pr(
     scan_id: str,

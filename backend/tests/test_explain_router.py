@@ -287,3 +287,29 @@ class TestRateLimit:
 
         module._limiter.reset()
         assert client.post("/scan/explain", json=FINDING).status_code == 200
+
+    def test_this_route_is_address_keyed_because_it_has_no_session(self):
+        """Deliberate, and the reason is worth pinning down.
+
+        /scan/{id}/create-pr moved to per-account keying because it already
+        required a session. This route takes no auth at all -- there is no
+        account to name -- so the peer address is the only identity available
+        and rate_limit (not rate_limit_by_user) is correct here. If this route
+        ever gains a session, the keying should move with it.
+        """
+        import inspect
+
+        from rate_limit import client_key, rate_limit, rate_limit_by_user
+
+        assert "user" not in inspect.signature(module.explain).parameters
+        source = inspect.getsource(module)
+        assert "rate_limit(_limiter)" in source
+        assert "rate_limit_by_user" not in source
+        # The address-keyed dependency is what this route is wired to.
+        assert inspect.signature(rate_limit(module._limiter)).parameters.keys() == {
+            "request"
+        }
+        assert inspect.signature(
+            rate_limit_by_user(module._limiter)
+        ).parameters.keys() == {"user"}
+        assert client_key is not None
