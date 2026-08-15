@@ -23,12 +23,16 @@ pytest.importorskip(
 import pqc_benchmark
 from pqc_benchmark import (
     MAX_ITERATIONS,
+    SLH_DSA_MAX_ITERATIONS,
+    SLH_DSA_MECHANISMS,
     benchmark_ecdsa,
     benchmark_kem,
     benchmark_rsa,
     benchmark_sig,
     clamp_iterations,
+    resolve_sig_mechanism,
     run_full_benchmark,
+    sig_iteration_cap,
 )
 
 KEM_FIELDS = {
@@ -139,6 +143,115 @@ class TestBenchmarkSig:
         result = benchmark_sig(algorithm, iterations=2)
         assert result["public_key_bytes"] == public_key_bytes
         assert result["signature_bytes"] == signature_bytes
+
+
+class TestBenchmarkSlhDsa:
+    """FIPS 205, the hash-based signature family offered beside ML-DSA.
+
+    Iteration counts here are 1 or 2 on purpose: a single SLH-DSA signature is
+    tens of milliseconds, which is the whole reason the module caps this row.
+    """
+
+    @staticmethod
+    @pytest.fixture(scope="class")
+    def result():
+        return benchmark_sig("SLH-DSA-SHA2-128f", iterations=2)
+
+    def test_matches_the_signature_result_shape(self, result):
+        assert SIG_FIELDS <= set(result)
+        assert "error" not in result
+
+    def test_reports_the_fips_205_name_not_the_liboqs_mechanism(self, result):
+        """The row is labeled with the standard's name for the parameter set.
+
+        liboqs spells these SLH_DSA_PURE_SHA2_128F (or, on older builds,
+        SPHINCS+-SHA2-128f-simple). Neither belongs in a table of standardized
+        algorithms.
+        """
+        assert result["algorithm"] == "SLH-DSA-SHA2-128f"
+
+    def test_rates_are_positive_floats(self, result):
+        assert_positive_rates(
+            result,
+            {"keygen_ops_per_sec", "sign_ops_per_sec", "verify_ops_per_sec"},
+        )
+
+    @pytest.mark.parametrize(
+        "algorithm,public_key_bytes,signature_bytes",
+        [
+            ("SLH-DSA-SHA2-128f", 32, 17088),
+            ("SLH-DSA-SHAKE-128f", 32, 17088),
+            ("SLH-DSA-SHA2-192f", 48, 35664),
+        ],
+    )
+    def test_every_offered_parameter_set_runs_at_its_fips_205_sizes(
+        self, algorithm, public_key_bytes, signature_bytes
+    ):
+        # Exact sizes, for the reason the ML-KEM test gives: a wrong one means
+        # something other than the requested parameter set was measured.
+        result = benchmark_sig(algorithm, iterations=1)
+        assert "error" not in result
+        assert result["public_key_bytes"] == public_key_bytes
+        assert result["signature_bytes"] == signature_bytes
+
+    def test_signatures_are_far_larger_than_ml_dsa_at_the_same_level(self):
+        slh_dsa = benchmark_sig("SLH-DSA-SHA2-128f", iterations=1)
+        ml_dsa = benchmark_sig("ML-DSA-44", iterations=2)
+        # The trade the page exists to show: a 32-byte public key against
+        # ML-DSA's 1312, paid for with a signature several times the size.
+        assert slh_dsa["public_key_bytes"] < ml_dsa["public_key_bytes"]
+        assert slh_dsa["signature_bytes"] > 5 * ml_dsa["signature_bytes"]
+
+    def test_the_iteration_cap_holds_however_many_were_asked_for(self):
+        result = benchmark_sig("SLH-DSA-SHA2-128f", iterations=MAX_ITERATIONS)
+        assert result["iterations"] == SLH_DSA_MAX_ITERATIONS
+        assert result["keygen_iterations"] == SLH_DSA_MAX_ITERATIONS
+
+    def test_a_lower_request_is_still_honoured(self):
+        assert benchmark_sig("SLH-DSA-SHA2-128f", iterations=1)["iterations"] == 1
+
+    def test_only_slh_dsa_is_capped(self):
+        assert sig_iteration_cap("ML-DSA-65") == MAX_ITERATIONS
+        assert sig_iteration_cap("SLH-DSA-SHA2-128f") == SLH_DSA_MAX_ITERATIONS
+        assert benchmark_sig("ML-DSA-44", iterations=12)["iterations"] == 12
+
+    def test_a_capped_run_is_quick_enough_for_a_live_request(self):
+        """The guard the cap exists for, asserted rather than assumed."""
+        import time
+
+        started = time.perf_counter()
+        benchmark_sig("SLH-DSA-SHAKE-128f", iterations=SLH_DSA_MAX_ITERATIONS)
+        # Generous: this is a timeout guard, not a performance target, and CI
+        # machines are slower than laptops.
+        assert time.perf_counter() - started < 10.0
+
+
+class TestSigMechanismResolution:
+    def test_names_liboqs_already_uses_pass_straight_through(self):
+        for algorithm in ("ML-DSA-44", "ML-DSA-65", "ML-DSA-87"):
+            assert resolve_sig_mechanism(algorithm) == algorithm
+
+    def test_an_unknown_name_is_left_alone_for_oqs_to_reject(self):
+        assert resolve_sig_mechanism("NOT-A-REAL-SIG") == "NOT-A-REAL-SIG"
+
+    def test_every_offered_set_resolves_to_a_mechanism_this_build_enables(self):
+        import oqs
+
+        enabled = set(oqs.get_enabled_sig_mechanisms())
+        for algorithm in SLH_DSA_MECHANISMS:
+            assert resolve_sig_mechanism(algorithm) in enabled, algorithm
+
+    def test_resolution_survives_an_oqs_that_will_not_list_mechanisms(
+        self, monkeypatch
+    ):
+        """A binding that cannot enumerate must not take the row down."""
+        monkeypatch.setattr(
+            pqc_benchmark.oqs,
+            "get_enabled_sig_mechanisms",
+            lambda: (_ for _ in ()).throw(RuntimeError("no library")),
+        )
+        resolved = resolve_sig_mechanism("SLH-DSA-SHA2-128f")
+        assert resolved == SLH_DSA_MECHANISMS["SLH-DSA-SHA2-128f"][0]
 
 
 class TestClassicalBenchmarks:
@@ -263,6 +376,33 @@ class TestRunFullBenchmark:
         for entry in result["sig_results"]:
             assert "error" not in entry
             assert SIG_FIELDS <= set(entry)
+
+    def test_both_signature_families_measure_in_one_run(self):
+        """What /benchmark/run asks for: ML-DSA and SLH-DSA side by side."""
+        result = run_full_benchmark(
+            iterations=2, sig_algorithms=("ML-DSA-44", "SLH-DSA-SHA2-128f")
+        )
+        assert [r["algorithm"] for r in result["sig_results"]] == [
+            "ML-DSA-44",
+            "SLH-DSA-SHA2-128f",
+            "RSA-2048",
+            "ECDSA-P256",
+        ]
+        for entry in result["sig_results"]:
+            assert "error" not in entry
+            assert SIG_FIELDS <= set(entry)
+
+    def test_a_failed_slh_dsa_row_reports_the_capped_iteration_count(self):
+        """An error row must not claim more iterations than a good one would."""
+        result = run_full_benchmark(
+            iterations=MAX_ITERATIONS, sig_algorithms=("SLH-DSA-NOT-REAL",)
+        )
+        failed = result["sig_results"][0]
+        assert failed["error"]
+        assert failed["algorithm"] == "SLH-DSA-NOT-REAL"
+        # Not in SLH_DSA_MECHANISMS, so uncapped: the cap follows the offered
+        # sets, and this asserts the error path reports honestly either way.
+        assert failed["iterations"] == MAX_ITERATIONS
 
     def test_results_are_live_rather_than_cached(self):
         # Two runs of genuinely timed code do not produce identical rates.

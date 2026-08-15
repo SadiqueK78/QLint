@@ -1018,26 +1018,38 @@ function reportFilename(result, extension) {
   return `qlint-report-${result.repo.replace("/", "-")}-${date}.${extension}`;
 }
 
+// The plain-text report the results panel used to offer a button for. The
+// button is gone -- SARIF says everything it said, in a format other tools
+// read -- but the builder is left in place, as is the backend endpoint, for
+// anything still pointed at it.
 function downloadReport(result) {
   const blob = new Blob([buildReportText(result)], { type: "text/plain" });
   saveBlob(blob, reportFilename(result, "txt"));
 }
 
-// SARIF and CBOM are both built server-side so the rule catalog, severity
-// mapping and CycloneDX enums stay in one place. A signed-in user's scan has
-// an id to address; an anonymous one does not, so that path asks the scan
-// endpoint to render the cached result in the requested format instead.
+// All three exports are built server-side so the rule catalog, severity
+// mapping and CycloneDX enums stay in one place. A saved scan has an id to
+// address; a scan whose record could not be written does not, so that path
+// asks the scan endpoint to render the result in the requested format
+// instead.
 //
-// The two downloads answer different questions and are offered side by side:
-// SARIF is "what is wrong and where", for code scanning tools; the CBOM is the
-// cryptographic inventory a PQC migration programme tracks progress against.
+// The three answer different questions and are offered side by side: SARIF is
+// "what is wrong and where", for code scanning tools; the CBOM is the
+// cryptographic inventory a PQC migration programme tracks progress against;
+// the SBOM is the ordinary software bill of materials for the same repository,
+// read from its dependency manifests rather than from the scan.
 const EXPORT_FORMATS = {
   sarif: { path: "sarif", extension: "sarif" },
   cbom: { path: "cbom", extension: "cbom.json" },
+  sbom: { path: "sbom", extension: "sbom.json" },
 };
 
 async function downloadExport(result, authToken, format) {
   const { path, extension } = EXPORT_FORMATS[format];
+  // The fallback carries the bearer token too. /scan has required a session
+  // since scanning was gated, so sending it unauthenticated was a guaranteed
+  // 401 -- which is exactly what a download did whenever the scan had no id
+  // to address.
   const response =
     result.scan_id && authToken
       ? await fetch(`${API_BASE}/user/scans/${result.scan_id}/${path}`, {
@@ -1045,12 +1057,32 @@ async function downloadExport(result, authToken, format) {
         })
       : await fetch(`${API_BASE}/scan?format=${format}`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+          },
           body: JSON.stringify({ repo_url: `https://github.com/${result.repo}` }),
         });
   if (!response.ok) {
     const body = await response.json().catch(() => null);
-    throw new Error(body?.detail || `HTTP ${response.status}`);
+    // FastAPI's detail is a string for a raised HTTPException and an array of
+    // field errors for a rejected query parameter; only the first is a message
+    // worth showing anyone.
+    const detail = typeof body?.detail === "string" ? body.detail : null;
+    // The two deploys are independent, so the SBOM button can reach a backend
+    // that has never heard of the format: an unknown route answers 404 with
+    // FastAPI's own "Not Found", and an unknown ?format= value answers 422.
+    // Either way this is a not-deployed-yet state, not a broken scan.
+    if (
+      format === "sbom" &&
+      (response.status === 422 ||
+        (response.status === 404 && (detail === null || detail === "Not Found")))
+    ) {
+      throw new Error(
+        "SBOM downloads are not available on this server yet. Try again shortly."
+      );
+    }
+    throw new Error(detail || `HTTP ${response.status}`);
   }
   saveBlob(await response.blob(), reportFilename(result, extension));
 }
@@ -2118,13 +2150,11 @@ function ResultsView({
         </div>
         <div className="results-actions-wrap">
           <div className="results-actions">
-            <button
-              className="btn-ghost btn-small"
-              type="button"
-              onClick={() => downloadReport(result)}
-            >
-              Download Report
-            </button>
+            {/* Three standard formats, and no plain-text button beside them.
+                The text report was a QLint-only shape nothing else could
+                read; everything it said is in the SARIF file, in a format
+                tools understand. The backend still serves it for anything
+                built against that endpoint. */}
             <button
               className="btn-ghost btn-small"
               type="button"
@@ -2142,6 +2172,15 @@ function ResultsView({
               title="CycloneDX 1.6 CBOM: an inventory of the cryptography this repository uses"
             >
               {exportBusy === "cbom" ? "Building CBOM..." : "Download CBOM"}
+            </button>
+            <button
+              className="btn-ghost btn-small"
+              type="button"
+              onClick={getExport("sbom", "SBOM")}
+              disabled={exportBusy !== null}
+              title="CycloneDX 1.6 SBOM: the libraries this repository depends on, read from its manifests"
+            >
+              {exportBusy === "sbom" ? "Building SBOM..." : "Download SBOM"}
             </button>
             {/* Shown whenever there is something to patch, connected or not.
                 Hiding it until write access exists would make the feature

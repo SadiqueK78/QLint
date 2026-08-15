@@ -3,7 +3,7 @@
 The only endpoint in QLint that writes to somebody else's repository, so it is
 the only one built defensively from the first line rather than the last.
 
-Four gates stand between a request and a commit, and all four have to open:
+Five gates stand between a request and a commit, and all five have to open:
 
 1. A JWT, like every other authenticated route.
 2. A *write* OAuth token, which is a different field on the user document than
@@ -12,7 +12,11 @@ Four gates stand between a request and a commit, and all four have to open:
    attempt with the read token.
 3. Ownership of the scan, through user_router's own helper, so this route
    cannot be pointed at a scan id belonging to someone else.
-4. Per-finding re-validation against the file as it exists on GitHub *now*.
+4. Push access to the target repository, read from the repository's own
+   permissions block. QLint scans public repositories nobody here owns, which
+   is exactly the case GitHub would reject mid-write, so it is settled up
+   front with a message that says what to do instead.
+5. Per-finding re-validation against the file as it exists on GitHub *now*.
    A finding's code_snippet was captured whenever the scan ran; the file may
    have changed since. Every selected finding is re-read and re-checked, and
    one that no longer matches is skipped and reported, never force-fitted.
@@ -99,6 +103,26 @@ WRITE_ACCESS_REQUIRED = (
     "request needs a separate connection from the read-only one used for "
     "scanning: open the account menu and choose Connect write access."
 )
+
+
+def no_push_access(owner: str, repo: str) -> str:
+    """The message for a repository the connected account cannot push to.
+
+    The sibling of WRITE_ACCESS_REQUIRED and a different failure: there the
+    account never granted QLint write access at all, here it did and GitHub
+    still says no, because this particular repository belongs to someone else.
+    Scanning a public repository you do not own is the normal case in QLint, so
+    a user reaching this has done nothing wrong and the message says what to do
+    instead rather than only what failed.
+    """
+    return (
+        f"You do not have write access to {owner}/{repo}, so QLint cannot open "
+        "a pull request there. To contribute a fix, fork the repository on "
+        "GitHub and scan your fork, or ask the repository owner to connect "
+        "QLint and create the pull request themselves. Either way the "
+        "migration patches stay available on the results screen to review and "
+        "apply by hand."
+    )
 
 
 class FindingSelection(BaseModel):
@@ -447,16 +471,15 @@ async def create_pr(
 
     client = request.app.state.github
     try:
+        # Gate five, and the first thing asked of GitHub: does this token
+        # actually have push access to this repository? The repository's own
+        # permissions block answers it in one read, before a branch exists,
+        # before a blob is uploaded, and before a single patch is generated --
+        # so a user who scanned somebody else's public repository is told what
+        # is wrong instead of watching GitHub reject a write halfway through.
         metadata = await get_repo_metadata(owner, repo, token, client)
         if not metadata["can_push"]:
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    f"The connected GitHub account cannot push to "
-                    f"{owner}/{repo}. Pull requests can only be created for "
-                    "repositories you have write access to."
-                ),
-            )
+            raise HTTPException(status_code=403, detail=no_push_access(owner, repo))
         base_branch = metadata["default_branch"]
         base_sha = await get_branch_head(owner, repo, base_branch, token, client)
 

@@ -26,6 +26,10 @@ numbers compare:
     wall clock of an interactive benchmark, so it is capped separately at
     RSA_KEYGEN_MAX_ITERATIONS. Every result reports the keygen_iterations it
     actually used, so the cap is visible rather than hidden.
+  * SLH-DSA signing is capped the same way, at SLH_DSA_MAX_ITERATIONS, and for
+    the same reason: it is tens of milliseconds per signature against ML-DSA's
+    one or two. There the whole row runs fewer iterations rather than just its
+    keygen, and the row's own `iterations` says so.
 
 Pure functions and no framework imports: this module is runnable and testable
 on its own, and benchmark_router.py is the only thing that knows about HTTP.
@@ -52,6 +56,48 @@ MAX_ITERATIONS = 200
 # See the module docstring: RSA keygen is the one operation slow enough to
 # blow the time budget of a live button click.
 RSA_KEYGEN_MAX_ITERATIONS = 10
+
+# SLH-DSA (FIPS 205) is the other one, and for a different reason: it is a
+# hash-based scheme whose signing cost is thousands of hash calls, so a single
+# signature takes tens of milliseconds where ML-DSA takes under two. Measured
+# here (liboqs 0.16.0, one operation each):
+#
+#   ML-DSA-65            keygen   4.4 ms   sign    1.8 ms   verify 0.3 ms
+#   SLH-DSA-SHA2-128f    keygen   2.1 ms   sign   71.4 ms   verify 4.5 ms
+#   SLH-DSA-SHAKE-128f   keygen   8.9 ms   sign  106.2 ms   verify 5.0 ms
+#   SLH-DSA-SHA2-192f    keygen   7.2 ms   sign   95.1 ms   verify 3.8 ms
+#
+# At the page's default of 50 iterations the SHAKE row alone would be six
+# seconds on this machine and several times that on a small cloud instance,
+# which is how a live button click turns into a gateway timeout. Ten iterations
+# holds the slowest selectable row near a second locally, and the entry reports
+# the count it actually used so the reduction is visible rather than hidden.
+SLH_DSA_MAX_ITERATIONS = 10
+
+# FIPS 205 parameter-set names -> the liboqs mechanism names that implement
+# them, most current first.
+#
+# liboqs renamed these when it caught up with the final standard: 0.13 and
+# later enable "SLH_DSA_PURE_<hash>_<level><s|f>", while earlier releases only
+# had the pre-standard "SPHINCS+-<hash>-<level><s|f>-simple" spelling of the
+# same parameter sets. QLint's own image pins the library to whatever
+# liboqs-python asks for, so both spellings are listed and resolved at run time
+# against what the process actually has -- a backend built against either
+# generation measures the algorithm the caller asked for rather than erroring.
+#
+# PURE, not PREHASH: FIPS 205 pure signing is the mode the standard describes
+# first and the one comparable with the ML-DSA rows, which sign the same
+# message directly.
+#
+# Only "f" (fast-signing) sets are offered. The "s" sets trade signing speed
+# for a smaller signature and the trade is severe -- SLH-DSA-SHA2-128s measures
+# 1147 ms per signature here, so even a handful of iterations would risk the
+# timeout this whole table of numbers exists to avoid.
+SLH_DSA_MECHANISMS: dict[str, tuple[str, ...]] = {
+    "SLH-DSA-SHA2-128f": ("SLH_DSA_PURE_SHA2_128F", "SPHINCS+-SHA2-128f-simple"),
+    "SLH-DSA-SHAKE-128f": ("SLH_DSA_PURE_SHAKE_128F", "SPHINCS+-SHAKE-128f-simple"),
+    "SLH-DSA-SHA2-192f": ("SLH_DSA_PURE_SHA2_192F", "SPHINCS+-SHA2-192f-simple"),
+}
 
 # The default run covers one representative security level per family rather
 # than every variant, so a click returns in a couple of seconds.
@@ -92,6 +138,44 @@ def clamp_iterations(iterations: int) -> int:
     except (TypeError, ValueError):
         return DEFAULT_ITERATIONS
     return max(MIN_ITERATIONS, min(value, MAX_ITERATIONS))
+
+
+def resolve_sig_mechanism(algorithm: str) -> str:
+    """Map a signature name to the mechanism this liboqs build actually enables.
+
+    Names that liboqs already uses verbatim -- every ML-DSA parameter set --
+    pass straight through, so this is a no-op for everything that existed
+    before SLH-DSA was offered. A FIPS 205 name is looked up in
+    SLH_DSA_MECHANISMS and answered with the first spelling the installed
+    library enables.
+
+    When none of the candidates is enabled the newest spelling is returned
+    anyway rather than raising: oqs is then the thing that reports the
+    algorithm is unavailable, in its own words, and _safe turns that into an
+    error row naming the parameter set the caller asked for.
+    """
+    candidates = SLH_DSA_MECHANISMS.get(algorithm)
+    if not candidates:
+        return algorithm
+    try:
+        enabled = set(oqs.get_enabled_sig_mechanisms())
+    except Exception:
+        return candidates[0]
+    for candidate in candidates:
+        if candidate in enabled:
+            return candidate
+    return candidates[0]
+
+
+def sig_iteration_cap(algorithm: str) -> int:
+    """The most iterations this signature algorithm may be measured over.
+
+    Only SLH-DSA is capped; see SLH_DSA_MAX_ITERATIONS for the measurements
+    behind the number.
+    """
+    if algorithm in SLH_DSA_MECHANISMS:
+        return SLH_DSA_MAX_ITERATIONS
+    return MAX_ITERATIONS
 
 
 def _ops_per_sec(iterations: int, elapsed_seconds: float) -> float:
@@ -154,19 +238,26 @@ def benchmark_kem(algorithm: str, iterations: int = DEFAULT_ITERATIONS) -> dict:
 
 
 def benchmark_sig(algorithm: str, iterations: int = DEFAULT_ITERATIONS) -> dict:
-    """Time keygen, signing and verification for an ML-DSA parameter set.
+    """Time keygen, signing and verification for a PQC signature parameter set.
 
-    Handles "ML-DSA-44", "ML-DSA-65" and "ML-DSA-87", plus anything else the
-    installed liboqs enables. A failed verification aborts the run rather than
-    being reported as throughput, for the same reason the KEM checks its
-    shared secrets.
+    Handles "ML-DSA-44", "ML-DSA-65" and "ML-DSA-87" (FIPS 204), the SLH-DSA
+    parameter sets named in SLH_DSA_MECHANISMS (FIPS 205), plus anything else
+    the installed liboqs enables under its own name. A failed verification
+    aborts the run rather than being reported as throughput, for the same
+    reason the KEM checks its shared secrets.
+
+    SLH-DSA is measured over at most SLH_DSA_MAX_ITERATIONS iterations however
+    many were asked for, because signing costs tens of milliseconds rather than
+    one or two. The returned `iterations` is the count actually run, so a row
+    never claims more measurements than it took.
     """
-    iterations = clamp_iterations(iterations)
+    iterations = min(clamp_iterations(iterations), sig_iteration_cap(algorithm))
+    mechanism = resolve_sig_mechanism(algorithm)
     keygen_seconds = 0.0
     sign_seconds = 0.0
     verify_seconds = 0.0
 
-    with oqs.Signature(algorithm) as signer:
+    with oqs.Signature(mechanism) as signer:
         for _ in range(iterations):
             start = time.perf_counter()
             public_key = signer.generate_keypair()
@@ -404,7 +495,9 @@ def run_full_benchmark(
         _safe(
             algorithm,
             "post-quantum",
-            iterations,
+            # The count benchmark_sig would really run, so a row that fails
+            # reports the same iteration count a successful one would have.
+            min(iterations, sig_iteration_cap(algorithm)),
             "sig",
             lambda algorithm=algorithm: benchmark_sig(algorithm, iterations),
         )

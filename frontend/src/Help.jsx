@@ -10,7 +10,7 @@ const FAQ = [
   {
     q: "How do I scan a repository?",
     a: [
-      "Paste a public GitHub repository URL into the field on the home page and press Scan Repository. Nothing is installed and no account is required. QLint reads the repository through the GitHub API, analyses it in memory, and discards the source; only the report is kept.",
+      "Sign in, paste a public GitHub repository URL into the field on the home page, and press Scan Repository. Nothing is installed and nothing is cloned to your machine: QLint reads the repository through the GitHub API, analyses it in memory, and discards the source; only the report is kept.",
       "A scan covers Python, JavaScript, TypeScript, Go, Java, and Rust files. Everything else is skipped, along with vendored trees like node_modules and __pycache__.",
     ],
   },
@@ -31,8 +31,8 @@ const FAQ = [
   {
     q: "What does signing in unlock?",
     a: [
-      "Scanning itself never needs an account. Signing in adds two things that require a scan saved against your name: My Scans, which keeps your past reports so you can reopen or delete them, and the HNDL Risk Calculator, which scores one of those saved reports.",
-      "Signing in with GitHub also supplies the API credential automatically, so you no longer need to paste a personal access token. Anonymous scans still produce the full report, the AI features, and the SARIF download.",
+      "Scanning itself, first of all: a scan spends GitHub API quota and writes a stored report, so it runs against an account rather than anonymously. Every scan you run is then saved under your name, which is what My Scans lists and what the HNDL Risk Calculator scores.",
+      "Signing in with GitHub also supplies the API credential automatically, so you no longer need to paste a personal access token, and it is the connection the SARIF, CBOM, and SBOM downloads are served against. Creating pull requests needs a second, separate grant on top of it.",
     ],
   },
   {
@@ -85,6 +85,13 @@ const FAQ = [
     ],
   },
   {
+    q: "Can I create a pull request on a repository I don't own?",
+    a: [
+      "Only if the connected GitHub account has write access to that particular repository, which in practice means you own it or somebody has added you as a collaborator. Connecting write access grants QLint permission to act as you; it does not grant you permission you do not already have, and GitHub decides that repository by repository.",
+      "QLint checks this before it writes anything, so a repository you cannot push to gives you a plain explanation rather than a confusing half-finished failure partway through. The work is not wasted either way: the generated patches stay on the results screen for you to review and apply by hand, or you can fork the repository on GitHub, scan your fork, and open the pull request from there.",
+    ],
+  },
+  {
     q: "What happens if my code changed since I scanned it?",
     a: [
       "QLint re-reads every file from GitHub immediately before patching it and compares each finding against the line the scan recorded. If that line has moved, changed, or gone, the patch is not applied: guessing where it went would mean editing code nobody has looked at.",
@@ -103,6 +110,20 @@ const FAQ = [
     a: [
       "SARIF is the Static Analysis Results Interchange Format, a standard file format that security tools use to describe findings. Because it is a standard, tools that have never heard of QLint can still read a QLint report.",
       "GitHub understands it natively: upload the file to a repository and the findings appear in that repository's Security tab, annotated on the exact lines that produced them. It is also the way to feed QLint results into dashboards, code review tooling, or anything else that consumes analysis output. The Download SARIF button on a results page produces the same file the CLI writes.",
+    ],
+  },
+  {
+    q: "What is an SBOM, and how is it different from the CBOM?",
+    a: [
+      "They answer different questions about the same repository. A CBOM, a cryptography bill of materials, inventories the cryptographic algorithms QLint found in the code: every place each one is used, and whether a quantum computer breaks it. An SBOM, a software bill of materials, inventories the packages the repository depends on, with versions where its manifests name exactly one.",
+      "Both are CycloneDX 1.6, the same industry standard, so either file drops into the supply-chain tooling your organisation already runs. The SBOM is built when you press the button, by reading the repository's own dependency manifests from its root: requirements.txt, package.json, go.mod, pom.xml, or Cargo.toml. If one of those is missing or cannot be parsed, the file says which language it could not cover instead of quietly leaving it out.",
+    ],
+  },
+  {
+    q: "What is SLH-DSA, and why is it in the Benchmark Lab?",
+    a: [
+      "SLH-DSA is FIPS 205, one of the three algorithms NIST standardized in 2024 and the second of its two signature schemes. Where ML-DSA's security rests on the hardness of lattice problems, SLH-DSA's rests on nothing beyond the hash functions it is built from, which is a much older and more thoroughly studied foundation.",
+      "That is the reason both were standardized rather than only the faster one: if lattice cryptography is ever broken, a signature scheme resting on entirely different mathematics does not fall with it. The cost of that insurance is visible in the measured numbers on the Benchmark Lab page, where SLH-DSA signs roughly forty times slower than ML-DSA and produces signatures several times larger. That is also why the page measures it over fewer iterations than the other rows, and says so beside the result.",
     ],
   },
   {
@@ -189,7 +210,8 @@ export default function Help() {
         <h1 className="page-title">Help</h1>
         <p className="page-intro">
           Common questions about scanning, reading results, and the tools around
-          them. QLint is free to use and needs no account to scan.
+          them. QLint is free to use; scanning runs against an account, so every
+          report is saved under yours.
         </p>
       </div>
 

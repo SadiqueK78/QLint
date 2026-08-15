@@ -28,6 +28,7 @@ try:
     from pqc_benchmark import (
         DEFAULT_ITERATIONS,
         MAX_ITERATIONS,
+        SLH_DSA_MAX_ITERATIONS,
         run_full_benchmark,
     )
 
@@ -38,6 +39,7 @@ except ImportError as exc:  # liboqs (or the oqs binding) is not in this process
     IMPORT_ERROR = str(exc)
     DEFAULT_ITERATIONS = 50
     MAX_ITERATIONS = 200
+    SLH_DSA_MAX_ITERATIONS = 10
     run_full_benchmark = None
 
 UNAVAILABLE = (
@@ -55,6 +57,29 @@ router = APIRouter(prefix="/benchmark")
 # of a per-algorithm error entry buried in an otherwise-successful 200.
 KEM_ALGORITHMS: tuple[str, ...] = ("ML-KEM-512", "ML-KEM-768", "ML-KEM-1024")
 SIG_ALGORITHMS: tuple[str, ...] = ("ML-DSA-44", "ML-DSA-65", "ML-DSA-87")
+
+# FIPS 205's hash-based signatures, the second standardized signature family
+# and the conservative alternative to ML-DSA: its security rests on hash
+# functions alone rather than on a lattice problem. Same allow-list discipline
+# as the two above, and the same names pqc_benchmark.SLH_DSA_MECHANISMS knows
+# how to resolve against whatever liboqs the process loaded.
+#
+# Only fast-signing ("f") sets are offered, and only the 128- and 192-bit
+# levels: the "s" sets sign roughly fifteen times slower for a smaller
+# signature, which is the wrong end of the trade for a live request.
+#
+# Unlike the two families above, this one has no default and is measured only
+# when a caller names a set. The two deploys are independent, so a backend
+# carrying this feature will serve the previous frontend for a while, and that
+# frontend must keep getting exactly the response it got before: three
+# sig_results entries, ML-DSA and the two classical rows. An opt-in parameter
+# is the only version of that with no window where the answer changes under a
+# caller that did not ask for it.
+SLH_DSA_ALGORITHMS: tuple[str, ...] = (
+    "SLH-DSA-SHA2-128f",
+    "SLH-DSA-SHAKE-128f",
+    "SLH-DSA-SHA2-192f",
+)
 
 DEFAULT_KEM_ALGORITHM = "ML-KEM-768"
 DEFAULT_SIG_ALGORITHM = "ML-DSA-65"
@@ -83,22 +108,32 @@ def run(
     iterations: int = DEFAULT_ITERATIONS,
     kem_algorithm: str = DEFAULT_KEM_ALGORITHM,
     sig_algorithm: str = DEFAULT_SIG_ALGORITHM,
+    slh_dsa_algorithm: str | None = None,
 ):
-    """Measure a chosen ML-KEM and ML-DSA level against RSA-2048 and ECDSA P-256.
+    """Measure chosen ML-KEM and ML-DSA sets against RSA and ECDSA.
 
     Public on purpose: this is a showcase of real post-quantum cryptography
     running server-side, not something tied to a user's scans, so it takes no
     auth and touches no scan data.
 
-    The two post-quantum parameter sets are selectable so a caller can watch
-    key and signature sizes move across NIST security levels. The classical
-    pair is deliberately fixed: it is the baseline the post-quantum numbers are
-    read against, and a moving baseline would make two runs incomparable.
+    The post-quantum parameter sets are selectable so a caller can watch key
+    and signature sizes move across NIST security levels. The classical pair is
+    deliberately fixed: it is the baseline the post-quantum numbers are read
+    against, and a moving baseline would make two runs incomparable.
+
+    `slh_dsa_algorithm` is the one parameter with no default. Naming a FIPS 205
+    set adds a fourth signature row, between ML-DSA and the classical pair, and
+    omitting it returns exactly the three-entry sig_results this endpoint
+    returned before SLH-DSA existed. See SLH_DSA_ALGORITHMS for why that is
+    opt-in rather than defaulted.
 
     `iterations` is clamped into [1, MAX_ITERATIONS] silently rather than
     rejected, so a caller passing 100000 gets a real answer for a bounded
-    amount of work instead of a 422 or a pinned CPU. Algorithm names are
-    validated strictly instead, for the reason given in _validate.
+    amount of work instead of a 422 or a pinned CPU. An SLH-DSA row is capped
+    further, at SLH_DSA_MAX_ITERATIONS, because its signing costs tens of
+    milliseconds where ML-DSA's costs one or two; the row reports the count it
+    actually ran. Algorithm names are validated strictly instead, for the
+    reason given in _validate.
 
     Declared `def`, not `async def`, deliberately: the benchmark is seconds of
     blocking CPU work, and FastAPI runs sync endpoints in a threadpool, so one
@@ -110,8 +145,18 @@ def run(
     kem_algorithm = _validate(kem_algorithm, KEM_ALGORITHMS, "kem_algorithm")
     sig_algorithm = _validate(sig_algorithm, SIG_ALGORITHMS, "sig_algorithm")
 
+    # Order matters to the reader more than to the code: the post-quantum
+    # signature rows first, then the classical baseline run_full_benchmark
+    # appends. An omitted slh_dsa_algorithm measures nothing extra -- not an
+    # empty row, no row at all.
+    sig_algorithms = (sig_algorithm,)
+    if slh_dsa_algorithm is not None:
+        sig_algorithms += (
+            _validate(slh_dsa_algorithm, SLH_DSA_ALGORITHMS, "slh_dsa_algorithm"),
+        )
+
     return run_full_benchmark(
         iterations=iterations,
         kem_algorithms=(kem_algorithm,),
-        sig_algorithms=(sig_algorithm,),
+        sig_algorithms=sig_algorithms,
     )

@@ -9,6 +9,16 @@ const ITERATIONS = 50;
 // a 400, and the dropdown is the only thing that populates the query string.
 const KEM_LEVELS = ["ML-KEM-512", "ML-KEM-768", "ML-KEM-1024"];
 const SIG_LEVELS = ["ML-DSA-44", "ML-DSA-65", "ML-DSA-87"];
+// FIPS 205, the hash-based signature family. Only the fast-signing "f" sets
+// are offered: the "s" sets buy a smaller signature with roughly fifteen times
+// the signing cost, which a live request cannot afford. The backend measures
+// this row over fewer iterations than the rest for the same reason, and says
+// so in the row's own iteration count.
+const SLH_DSA_LEVELS = [
+  "SLH-DSA-SHA2-128f",
+  "SLH-DSA-SHAKE-128f",
+  "SLH-DSA-SHA2-192f",
+];
 
 // Sizes are small enough that plain bytes read better than any unit prefix.
 function bytes(value) {
@@ -229,6 +239,7 @@ export default function PqcBenchmark() {
   const [runCount, setRunCount] = useState(0);
   const [kemLevel, setKemLevel] = useState("ML-KEM-768");
   const [sigLevel, setSigLevel] = useState("ML-DSA-65");
+  const [slhDsaLevel, setSlhDsaLevel] = useState("SLH-DSA-SHA2-128f");
 
   const runBenchmark = async () => {
     setLoading(true);
@@ -240,6 +251,7 @@ export default function PqcBenchmark() {
         iterations: String(ITERATIONS),
         kem_algorithm: kemLevel,
         sig_algorithm: sigLevel,
+        slh_dsa_algorithm: slhDsaLevel,
       });
       const res = await fetch(`${API_BASE}/benchmark/run?${query}`, {
         cache: "no-store",
@@ -291,6 +303,16 @@ export default function PqcBenchmark() {
       )
     : null;
 
+  // Rows the backend measured over fewer iterations than the run asked for --
+  // SLH-DSA today. Read off the rows themselves rather than hardcoding which
+  // algorithm is slow, so the note follows the backend's cap instead of
+  // restating it and going stale.
+  const cappedRows = result
+    ? [...result.kem_results, ...result.sig_results].filter(
+        (entry) => entry.iterations < result.iterations
+      )
+    : [];
+
   return (
     <div className="pqc-page">
       <div className="pqc-header">
@@ -303,8 +325,9 @@ export default function PqcBenchmark() {
           This page runs real post-quantum cryptography on the QLint server, on
           demand. Clicking the button below generates keys, encapsulates and
           decapsulates shared secrets with ML-KEM, and signs and verifies a
-          message with ML-DSA, the two algorithms NIST standardized in 2024,
-          then does the same work with classical RSA and ECDSA for comparison.
+          message with ML-DSA and SLH-DSA, the three algorithms NIST
+          standardized in 2024, then does the same work with classical RSA and
+          ECDSA for comparison.
           Every number in the table is timed during that run, and every key and
           signature size is measured from the bytes the algorithm actually
           produced. Nothing here is a published figure looked up from a table.
@@ -349,6 +372,21 @@ export default function PqcBenchmark() {
             disabled={loading}
           >
             {SIG_LEVELS.map((level) => (
+              <option key={level} value={level}>
+                {level}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="pqc-level">
+          <span className="pqc-level-label">SLH-DSA parameter set</span>
+          <select
+            className="pqc-select"
+            value={slhDsaLevel}
+            onChange={(event) => setSlhDsaLevel(event.target.value)}
+            disabled={loading}
+          >
+            {SLH_DSA_LEVELS.map((level) => (
               <option key={level} value={level}>
                 {level}
               </option>
@@ -424,6 +462,18 @@ export default function PqcBenchmark() {
               is the trade: those bytes buy security believed to hold against a
               quantum computer, which RSA and ECDSA will not.
             </p>
+
+            {cappedRows.length > 0 && (
+              <p className="pqc-method-text">
+                {cappedRows.map((entry) => entry.algorithm).join(", ")} ran{" "}
+                {cappedRows[0].iterations} iterations rather than{" "}
+                {result.iterations}. SLH-DSA is hash-based: one signature is
+                thousands of hash calls, tens of milliseconds against ML-DSA's
+                one or two, so the full count would spend most of a minute on a
+                single row. The rates are per-operation either way, and each
+                row's iteration count is the one it was measured over.
+              </p>
+            )}
 
             {cappedKeygen && (
               <p className="pqc-method-text">

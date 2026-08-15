@@ -169,8 +169,15 @@ def scan_app(monkeypatch):
     async def cache_lookup(repo_url):
         return None
 
-    async def cache_store(repo_url, result, user):
-        stored.append({"repo_url": repo_url, "result": result, "user": user})
+    async def cache_store(repo_url, result, user, expires_at=None):
+        stored.append(
+            {
+                "repo_url": repo_url,
+                "result": result,
+                "user": user,
+                "expires_at": expires_at,
+            }
+        )
         return "652f1f77bcf86cd7994390a1"
 
     monkeypatch.setattr(scan_module, "_cache_lookup", cache_lookup)
@@ -323,5 +330,12 @@ class TestTheRouterOnClientDisconnect:
         )
         assert response.status_code == 200
         assert response.json()["cached"] is True
+        # The point of the test: no GitHub work was done, so a disconnect had
+        # nothing to cancel.
         assert repo.fetched == []
-        assert stored == []
+        # The cached entry belongs to nobody (user_id None), so the caller is
+        # given a scan record of their own holding the same result -- the fix
+        # for downloads failing on a repository somebody else had scanned. It
+        # is a Mongo write, not a scan: still nothing for a cancel to stop.
+        assert len(stored) == 1
+        assert stored[0]["result"] == {"repo": "acme/demo", "scanned_files": 3}

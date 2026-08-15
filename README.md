@@ -10,7 +10,7 @@ QLint scans the Python, JavaScript, TypeScript, Go, Java, and Rust code in any p
 
 Every finding comes with a severity rating, the quantum attack vector, and a ready-to-use fix snippet showing the migration to the NIST-standardized post-quantum replacement (ML-KEM, ML-DSA, SLH-DSA). Any finding can also be explained in plain English or turned into a copy-paste unified diff, both generated against your actual code. The whole repository is summarized into a PQC readiness score from 0 to 100.
 
-Beyond the scan, QLint includes a PQC Benchmark Lab — real, on-demand liboqs execution comparing ML-KEM/ML-DSA against RSA/ECDSA performance and key sizes on this server, not looked-up figures — and an HNDL (Harvest Now, Decrypt Later) risk calculator, which frames a scan's findings against how long the underlying data needs to stay confidential.
+Beyond the scan, QLint includes a PQC Benchmark Lab — real, on-demand liboqs execution comparing ML-KEM/ML-DSA/SLH-DSA against RSA/ECDSA performance and key sizes on this server, not looked-up figures — and an HNDL (Harvest Now, Decrypt Later) risk calculator, which frames a scan's findings against how long the underlying data needs to stay confidential.
 
 ## Architecture
 
@@ -18,7 +18,7 @@ QLint is a standard three-tier web app, plus a standalone CLI that reuses the sa
 
 Scanning pipeline: a scan request resolves a GitHub repo, walks its files by extension, and routes each file to a language-specific scanner (ast_scanner.py for Python, pattern-based scanners for JS/TS/Go/Java/Rust). Each scanner shares common helpers — line/position tracking, comment-stripping, snippet extraction — through scanner_common.py, so every finding across every language carries the same shape: algorithm, severity, attack vector, and both the vulnerable code and its fix as real, position-accurate snippets. scanner_engine.py orchestrates this whether the source is a GitHub repo (web app) or a local directory (CLI/CI), so both paths run identical detection logic.
 
-Report generation: the scan output feeds three formats — the app's native JSON report, SARIF 2.1.0 (for GitHub Code Scanning and other SARIF viewers), and CycloneDX 1.6 CBOM (a standard cryptography-asset inventory for tracking migration progress across a codebase or fleet).
+Report generation: the scan output feeds three formats — the app's native JSON report, SARIF 2.1.0 (for GitHub Code Scanning and other SARIF viewers), and CycloneDX 1.6 CBOM (a standard cryptography-asset inventory for tracking migration progress across a codebase or fleet). A fourth download, the CycloneDX 1.6 SBOM, is not derived from the scan at all: it reads the scanned repository's own root dependency manifests (requirements.txt, package.json, go.mod, pom.xml, Cargo.toml) when the download is requested, and reports which languages it could not cover rather than silently omitting them.
 
 AI features: the explain and patch endpoints call OpenRouter, grounding every prompt in the real surrounding file content (not just the isolated flagged line) so generated patches match actual indentation and context rather than hallucinating structure. Both are cached in MongoDB, keyed by finding content, so identical vulnerable code anywhere shares one cached result.
 
@@ -31,7 +31,7 @@ One-click PR creation: the flagship feature applies AI-generated patches directl
 - Auth: JWT (python-jose) + bcrypt password hashing (passlib), plus GitHub OAuth
 - Frontend: React 18, Vite
 - Scanners: Python ast module; context-aware pattern matching for JS/TS/Go/Java/Rust
-- Output: SARIF 2.1.0, CycloneDX 1.6 CBOM, native JSON
+- Output: SARIF 2.1.0, CycloneDX 1.6 CBOM, CycloneDX 1.6 SBOM, native JSON
 - CI: standalone CLI and a composite GitHub Action, no server or database needed
 - PQC: liboqs, compiled from source in the backend Docker image
 - Standards: NIST FIPS 203, 204, 205 (2024)
@@ -56,6 +56,7 @@ QLint/
 │   ├── scanner_engine.py        (orchestration: GitHub repo or local directory)
 │   ├── sarif_converter.py       (scan report -> SARIF 2.1.0)
 │   ├── cbom_converter.py        (scan report -> CycloneDX 1.6 CBOM)
+│   ├── sbom_converter.py        (repo manifests -> CycloneDX 1.6 SBOM)
 │   ├── pqc_benchmark.py         (liboqs benchmarks)
 │   ├── qlint_cli.py             (standalone CI scanner, no server or database)
 │   ├── Dockerfile               (builds liboqs from source, then runs uvicorn)
@@ -86,6 +87,12 @@ Prefer running natively instead of Docker? See backend/requirements.txt and fron
 
 You'll need your own GitHub OAuth App (for the "Continue with GitHub" flow) and, optionally, an OpenRouter API key (for AI explain/patch features) — see backend/.env.example for every variable the app reads.
 
+## Deployment
+
+The live app runs on Render as two independently deployed services: the backend API, built from backend/Dockerfile (which compiles liboqs, so the PQC Benchmark Lab works in production), and the frontend, built from frontend/Dockerfile (vite build served by nginx). The docker compose setup above is for local development and is not how production is wired.
+
+Because the two deploy separately, either can be live against an older version of the other for a few minutes. Frontend code that calls a new backend route has to degrade to a normal error state rather than break. The two find each other through configuration: the backend reads FRONTEND_URL to allow the deployed browser origin through CORS and to build its OAuth redirect, and the frontend reads VITE_API_URL to locate the backend.
+
 ## Running Tests
 
 ```bash
@@ -93,9 +100,11 @@ cd backend
 pytest
 ```
 
+Two test modules import liboqs through pqc_benchmark.py — tests/test_pqc_benchmark.py and tests/test_routers.py. On a machine without liboqs (a native Windows setup, for instance) run the rest with `pytest --ignore=tests/test_pqc_benchmark.py --ignore=tests/test_routers.py`, and run those two inside the backend container or any environment where liboqs is built.
+
 ## Use QLint in CI
 
-backend/qlint_cli.py is a standalone scanner: it walks a directory already on disk and needs no server, database, credentials, or GitHub API calls. It runs the same scanners and emits the same SARIF/CBOM output as the web app.
+backend/qlint_cli.py is a standalone scanner: it walks a directory already on disk and needs no server, database, credentials, or GitHub API calls. It runs the same scanners and emits the same SARIF/CBOM output as the web app. SBOM output is web-only — it is built by reading the repository's dependency manifests from GitHub, which is exactly the API access the CLI is designed not to need.
 
 ```bash
 python backend/qlint_cli.py --path . --output qlint-results.sarif

@@ -357,6 +357,105 @@ class TestWriteScopeIsRequired:
         assert github.pulls == []
         assert generator.calls == 0
 
+
+# ------------------------------------------------------- push access up front
+
+
+class TestPushAccessIsCheckedBeforeAnyWrite:
+    """The case this feature was never exercised against: somebody else's repo.
+
+    Connecting write access grants QLint the public_repo scope on the user's
+    *account*; it says nothing about any particular repository. Scanning a
+    public repository nobody here owns is QLint's normal case, so the account
+    holding a write token and still having no push access to the scanned
+    repository is an ordinary situation rather than an edge one -- and left
+    unchecked it surfaces as GitHub refusing a branch creation partway through
+    the flow, after the model has already been paid to write patches.
+
+    Both directions are asserted here, because a check that blocks everything
+    is as broken as one that blocks nothing: the same request, over the same
+    fixtures, differing only in the repository's permissions.push flag.
+    """
+
+    def test_a_repository_the_account_cannot_push_to_is_refused(
+        self, client, github, generator, patch_cache, scan_owner
+    ):
+        github.can_push = False
+        response = create(client)
+        assert response.status_code == 403
+
+    def test_the_refusal_names_the_repository_and_what_to_do_instead(
+        self, client, github, generator, patch_cache, scan_owner
+    ):
+        github.can_push = False
+        detail = create(client).json()["detail"]
+        assert "testowner/testrepo" in detail
+        assert "write access" in detail
+        # The two ways forward, rather than only the fact of the failure.
+        assert "fork" in detail.lower()
+        assert "repository owner" in detail.lower()
+
+    def test_the_refusal_writes_nothing_and_generates_no_patches(
+        self, client, github, generator, patch_cache, scan_owner
+    ):
+        """Every write the router can make, and the one thing that costs money."""
+        github.can_push = False
+        create(client)
+        assert github.created_branches == []
+        assert github.blobs == {}
+        assert github.trees == []
+        assert github.commits == []
+        assert github.pulls == []
+        assert generator.calls == 0
+        # Nothing to clean up, because nothing was created in the first place.
+        assert github.deleted_branches == []
+
+    def test_a_repository_the_account_can_push_to_is_not_blocked(
+        self, client, github, generator, patch_cache, scan_owner
+    ):
+        """The regression guard: the existing, working case must stay working."""
+        assert github.can_push is True
+        response = create(client)
+        assert response.status_code == 200
+        body = response.json()
+        assert body["created"] is True
+        assert body["repo"] == "testowner/testrepo"
+        assert github.created_branches
+        assert len(github.pulls) == 1
+
+    def test_only_the_permissions_flag_separates_the_two_outcomes(
+        self, client, github, generator, patch_cache, scan_owner
+    ):
+        """One request, run both ways, so neither direction can pass by luck."""
+        github.can_push = False
+        refused = create(client)
+
+        github.can_push = True
+        allowed = create(client)
+
+        assert refused.status_code == 403
+        assert allowed.status_code == 200
+        assert allowed.json()["created"] is True
+
+    def test_the_permission_read_uses_the_write_token(
+        self, client, github, generator, patch_cache, scan_owner, monkeypatch
+    ):
+        """Reading it with the scanning token would answer about the wrong grant."""
+        tokens = []
+
+        async def capture(owner, repo, token, client_):
+            tokens.append(token)
+            return {
+                "default_branch": "main",
+                "can_push": False,
+                "private": False,
+                "full_name": f"{owner}/{repo}",
+            }
+
+        monkeypatch.setattr(module, "get_repo_metadata", capture)
+        assert create(client).status_code == 403
+        assert tokens == [USER["github_write_token"]]
+
     def test_the_read_token_is_never_used_as_a_fallback(
         self, client, github, generator, patch_cache, scan_owner
     ):
@@ -698,7 +797,7 @@ class TestFailuresAreReported:
         github.can_push = False
         response = create(client)
         assert response.status_code == 403
-        assert "cannot push" in response.json()["detail"]
+        assert "write access" in response.json()["detail"]
         assert github.created_branches == []
 
     def test_an_unexpected_error_is_a_500_that_says_where_to_look(

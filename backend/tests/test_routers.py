@@ -1,6 +1,7 @@
 """Unit tests for the pure helpers behind the scan cache and history routes,
 plus route-level tests for the HNDL calculator endpoints."""
 
+import inspect
 from datetime import datetime, timezone
 
 import pytest
@@ -264,6 +265,11 @@ def benchmark_client():
         ("Kyber768", benchmark_module.KEM_ALGORITHMS, "kem_algorithm"),
         ("Dilithium3", benchmark_module.SIG_ALGORITHMS, "sig_algorithm"),
         ("", benchmark_module.SIG_ALGORITHMS, "sig_algorithm"),
+        # SLH-DSA is validated against its own list, so an ML-DSA name is as
+        # wrong here as a made-up one.
+        ("SPHINCS+-SHA2-128f", benchmark_module.SLH_DSA_ALGORITHMS,
+         "slh_dsa_algorithm"),
+        ("ML-DSA-65", benchmark_module.SLH_DSA_ALGORITHMS, "slh_dsa_algorithm"),
     ],
 )
 def test_validate_400s_and_lists_the_valid_options(value, allowed, parameter):
@@ -282,6 +288,9 @@ def test_validate_400s_and_lists_the_valid_options(value, allowed, parameter):
         ("ML-KEM-512", benchmark_module.KEM_ALGORITHMS),
         ("ML-KEM-1024", benchmark_module.KEM_ALGORITHMS),
         ("ML-DSA-87", benchmark_module.SIG_ALGORITHMS),
+        ("SLH-DSA-SHA2-128f", benchmark_module.SLH_DSA_ALGORITHMS),
+        ("SLH-DSA-SHAKE-128f", benchmark_module.SLH_DSA_ALGORITHMS),
+        ("SLH-DSA-SHA2-192f", benchmark_module.SLH_DSA_ALGORITHMS),
     ],
 )
 def test_validate_passes_every_offered_level_through(value, allowed):
@@ -292,6 +301,21 @@ def test_the_defaults_are_themselves_valid_choices():
     # A default outside its own allow-list would 400 every unparameterized call.
     assert benchmark_module.DEFAULT_KEM_ALGORITHM in benchmark_module.KEM_ALGORITHMS
     assert benchmark_module.DEFAULT_SIG_ALGORITHM in benchmark_module.SIG_ALGORITHMS
+
+
+def test_slh_dsa_has_no_default_at_all():
+    """It is opt-in, so that an old caller's response cannot change under it."""
+    assert not hasattr(benchmark_module, "DEFAULT_SLH_DSA_ALGORITHM")
+    signature = inspect.signature(benchmark_module.run)
+    assert signature.parameters["slh_dsa_algorithm"].default is None
+
+
+def test_only_fast_signing_slh_dsa_sets_are_offered():
+    """The "s" sets sign ~15x slower; offering one would risk a live timeout."""
+    assert benchmark_module.SLH_DSA_ALGORITHMS
+    for algorithm in benchmark_module.SLH_DSA_ALGORITHMS:
+        assert algorithm.startswith("SLH-DSA-")
+        assert algorithm.endswith("f"), algorithm
 
 
 @pytest.mark.skipif(
@@ -329,7 +353,8 @@ def test_run_measures_the_requested_levels_not_the_defaults(benchmark_client):
     assert body["kem_results"][0]["public_key_bytes"] == 1568
     assert body["sig_results"][0]["algorithm"] == "ML-DSA-87"
     assert body["sig_results"][0]["signature_bytes"] == 4627
-    # The classical baseline is fixed and comes along unchanged.
+    # The classical baseline is fixed and comes along unchanged. Nothing was
+    # asked of SLH-DSA, so nothing sits between them.
     assert [r["algorithm"] for r in body["sig_results"][1:]] == [
         "RSA-2048",
         "ECDSA-P256",
@@ -346,6 +371,75 @@ def test_run_still_defaults_to_the_768_65_pair(benchmark_client):
     body = response.json()
     assert body["kem_results"][0]["algorithm"] == "ML-KEM-768"
     assert body["sig_results"][0]["algorithm"] == "ML-DSA-65"
+
+
+@pytest.mark.skipif(
+    not benchmark_module.BENCHMARK_AVAILABLE,
+    reason="liboqs is not available in this environment; run from WSL",
+)
+def test_an_unparameterized_run_is_byte_for_byte_the_pre_slh_dsa_shape(
+    benchmark_client,
+):
+    """The deploy-window guarantee: the old frontend must see no change.
+
+    Backend and frontend ship separately, so this response is served to a UI
+    built before SLH-DSA existed. Three signature rows, in the order that UI
+    renders them, and no fourth row appearing under it.
+    """
+    body = benchmark_client.get(
+        "/benchmark/run", params={"iterations": 1}
+    ).json()
+    assert [r["algorithm"] for r in body["sig_results"]] == [
+        "ML-DSA-65",
+        "RSA-2048",
+        "ECDSA-P256",
+    ]
+    assert [r["algorithm"] for r in body["kem_results"]] == ["ML-KEM-768"]
+    assert not any(
+        "SLH" in r["algorithm"] for r in body["sig_results"] + body["kem_results"]
+    )
+
+
+@pytest.mark.skipif(
+    not benchmark_module.BENCHMARK_AVAILABLE,
+    reason="liboqs is not available in this environment; run from WSL",
+)
+def test_run_measures_the_requested_slh_dsa_set(benchmark_client):
+    response = benchmark_client.get(
+        "/benchmark/run",
+        params={"iterations": 1, "slh_dsa_algorithm": "SLH-DSA-SHA2-192f"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    row = body["sig_results"][1]
+    assert row["algorithm"] == "SLH-DSA-SHA2-192f"
+    assert "error" not in row
+    # The FIPS 205 sizes for this set, so the row is a real measurement of the
+    # requested parameter set rather than a relabeled default.
+    assert row["public_key_bytes"] == 48
+    assert row["signature_bytes"] == 35664
+
+
+@pytest.mark.skipif(
+    not benchmark_module.BENCHMARK_AVAILABLE,
+    reason="liboqs is not available in this environment; run from WSL",
+)
+def test_run_caps_slh_dsa_iterations_below_the_requested_count(benchmark_client):
+    """The timeout guard: SLH-DSA must not run the full iteration count."""
+    requested = benchmark_module.SLH_DSA_MAX_ITERATIONS + 5
+    response = benchmark_client.get(
+        "/benchmark/run",
+        params={
+            "iterations": requested,
+            "slh_dsa_algorithm": benchmark_module.SLH_DSA_ALGORITHMS[0],
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["iterations"] == requested
+    ml_dsa, slh_dsa = body["sig_results"][0], body["sig_results"][1]
+    assert ml_dsa["iterations"] == requested
+    assert slh_dsa["iterations"] == benchmark_module.SLH_DSA_MAX_ITERATIONS
 
 
 # ------------------------------------------------------------- SARIF download

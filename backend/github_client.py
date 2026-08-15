@@ -164,6 +164,31 @@ async def get_file_content(
             await client.aclose()
 
 
+def manifest_fetcher(
+    owner: str, repo: str, token: str, client: httpx.AsyncClient | None = None
+):
+    """An async `fetch(path) -> str | None` bound to one repository.
+
+    The SBOM download reads a handful of files from a repository root and has
+    to treat "not there" as an ordinary answer -- most repositories have one
+    dependency manifest, not five. This wraps get_file_content so that every
+    absent file, oversized file and transport failure comes back as None,
+    leaving sbom_converter to record the gap in its coverage notes rather than
+    to distinguish GitHub's error types.
+
+    The same shape F29 uses to re-read a file before patching it: the shared
+    httpx client is passed in, so a download costs no new connection.
+    """
+
+    async def fetch(path: str) -> str | None:
+        try:
+            return await get_file_content(owner, repo, path, token, client=client)
+        except (GitHubError, httpx.HTTPError):
+            return None
+
+    return fetch
+
+
 async def check_rate_limit(
     token: str, client: httpx.AsyncClient | None = None
 ) -> dict[str, int | str]:

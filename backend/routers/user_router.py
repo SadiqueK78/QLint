@@ -1,8 +1,10 @@
 """Per-user scan history."""
 
+import os
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from dotenv import load_dotenv
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pymongo import DESCENDING
 from pymongo.errors import PyMongoError
@@ -10,7 +12,13 @@ from pymongo.errors import PyMongoError
 from auth import get_current_user, to_object_id
 from database import VISIBLE_SCAN, get_scans
 from cbom_converter import convert_to_cbom
+from github_client import InvalidRepoURLError, manifest_fetcher, parse_repo_url
 from sarif_converter import convert_to_sarif
+from sbom_converter import generate_sbom
+
+load_dotenv()
+
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 
 router = APIRouter(prefix="/user")
 
@@ -92,26 +100,77 @@ async def list_scans(
 
 
 async def _owned_scan(scan_id: str, user: dict) -> dict:
-    """Fetch a scan the caller owns and has not hidden, or 404.
+    """Fetch a scan the caller may read and has not hidden, or 404.
+
+    Ownership here means one thing and nothing else: whether this QLint
+    account is the account whose /scan call created this document, which is
+    what the stored user_id records. Who owns the scanned repository on GitHub
+    plays no part in it and must not -- QLint exists to scan public
+    repositories that belong to other people, so a user's own scan of
+    paramiko/paramiko is as much their scan record as one of their own code.
 
     The user_id filter is what keeps one user from reading another's scan: a
-    scan owned by someone else is indistinguishable from a missing one. A scan
-    the owner has deleted reads the same way -- the document survives for the
-    admin aggregates, but every user-facing route treats it as gone, so /full,
-    /sarif and /cbom cannot serve content the user asked to remove from view.
+    scan owned by someone else is indistinguishable from a missing one. An
+    admin is exempt, because operating the service means being able to open
+    what the service stored.
+
+    A scan the owner has deleted reads as missing for everyone, admin
+    included. The document survives for the admin aggregates, but the delete
+    button's promise is that the report itself stops being served, and an
+    export route is exactly a way of serving it.
     """
     object_id = to_object_id(scan_id)
     if object_id is None:
         raise HTTPException(status_code=404, detail="Scan not found")
+    query = {"_id": object_id, **VISIBLE_SCAN}
+    if user.get("role", "user") != "admin":
+        query["user_id"] = str(user["_id"])
     try:
-        entry = await get_scans().find_one(
-            {"_id": object_id, "user_id": str(user["_id"]), **VISIBLE_SCAN}
-        )
+        entry = await get_scans().find_one(query)
     except PyMongoError as exc:
         raise HTTPException(status_code=503, detail=DB_UNAVAILABLE) from exc
     if not entry:
         raise HTTPException(status_code=404, detail="Scan not found")
     return entry
+
+
+def _repo_parts(entry: dict) -> tuple[str, str]:
+    """The (owner, repo) a stored scan was run against.
+
+    Read from the stored repo_url, which _canonical_url normalized on the way
+    in, and from the report's own "repo" field as a fallback for documents
+    written before that normalization.
+    """
+    try:
+        return parse_repo_url(entry.get("repo_url") or "")
+    except InvalidRepoURLError:
+        pass
+    name = ((entry.get("result") or {}).get("repo") or "").strip("/")
+    if name.count("/") == 1 and all(part for part in name.split("/")):
+        owner, repo = name.split("/")
+        return owner, repo
+    raise HTTPException(
+        status_code=422,
+        detail="This scan has no GitHub repository to build an SBOM from",
+    )
+
+
+def _github_token(user: dict) -> str:
+    """The credential to read the scanned repository's manifests with.
+
+    The caller's connected GitHub account first, so a scan of a private
+    repository can still be inventoried, then the server-wide token. Same
+    precedence as scanning itself, minus the per-request token that only the
+    scan form collects.
+    """
+    if user.get("github_connected") and user.get("github_access_token"):
+        return user["github_access_token"]
+    if not GITHUB_TOKEN:
+        raise HTTPException(
+            status_code=500,
+            detail="GITHUB_TOKEN is not configured. Add it to backend/.env",
+        )
+    return GITHUB_TOKEN
 
 
 @router.get("/scans/{scan_id}/full")
@@ -160,6 +219,42 @@ async def get_scan_cbom(scan_id: str, user: dict = Depends(get_current_user)):
         headers={
             "Content-Disposition": (
                 f'attachment; filename="qlint-scan-{scan_id}.cbom.json"'
+            )
+        },
+    )
+
+
+@router.get("/scans/{scan_id}/sbom")
+async def get_scan_sbom(
+    scan_id: str, request: Request, user: dict = Depends(get_current_user)
+):
+    """The scanned repository's software dependencies, as a CycloneDX 1.6 SBOM.
+
+    The third export, and the only one not derived from the stored report: a
+    CBOM inventories the cryptography QLint found in the code, an SBOM
+    inventories the libraries the repository declares it depends on. That
+    lives in the repository's manifests, not in the scan, so it is read from
+    GitHub now -- which also means the answer describes the repository as it
+    stands rather than as it stood when the scan ran.
+
+    Gated by the same scan-record ownership check as /sarif and /cbom.
+    """
+    entry = await _owned_scan(scan_id, user)
+    result = entry.get("result") or {}
+    owner, repo = _repo_parts(entry)
+    sbom = await generate_sbom(
+        owner,
+        repo,
+        result.get("languages_scanned") or [],
+        manifest_fetcher(
+            owner, repo, _github_token(user), request.app.state.github
+        ),
+    )
+    return JSONResponse(
+        content=sbom,
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="qlint-scan-{scan_id}.sbom.json"'
             )
         },
     )

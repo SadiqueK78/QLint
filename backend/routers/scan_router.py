@@ -22,10 +22,12 @@ from github_client import (
     RepoNotFoundError,
     check_rate_limit,
     get_repo_files,
+    manifest_fetcher,
     parse_repo_url,
 )
 from cbom_converter import convert_to_cbom
 from sarif_converter import convert_to_sarif
+from sbom_converter import generate_sbom
 from scanner_engine import ScanCancelled, scan_repository
 
 load_dotenv()
@@ -119,12 +121,18 @@ async def _cache_lookup(repo_url: str) -> dict | None:
         return None  # cache is an optimization, never a hard dependency
 
 
-async def _cache_store(repo_url: str, result: dict, user: dict) -> str | None:
+async def _cache_store(
+    repo_url: str, result: dict, user: dict, expires_at: datetime | None = None
+) -> str | None:
     """Store the scan and return its id, or None if the write did not happen.
 
     Every scan has an owner now that /scan requires a session, so the entry is
     always attributed; older documents from the anonymous era keep their
     "anonymous" scanned_by and null user_id, which the reads below still handle.
+
+    `expires_at` is passed only when the result came from another user's cache
+    entry: the copy inherits that entry's expiry rather than starting a fresh
+    TTL, so serving a cached result cannot extend how long it is cached for.
     """
     now = datetime.now(timezone.utc)
     entry = {
@@ -133,7 +141,7 @@ async def _cache_store(repo_url: str, result: dict, user: dict) -> str | None:
         "user_id": str(user["_id"]),
         "result": result,
         "created_at": now,
-        "expires_at": now + timedelta(hours=SCAN_CACHE_TTL_HOURS),
+        "expires_at": expires_at or now + timedelta(hours=SCAN_CACHE_TTL_HOURS),
     }
     try:
         inserted = await get_scans().insert_one(entry)
@@ -146,29 +154,62 @@ async def _cache_store(repo_url: str, result: dict, user: dict) -> str | None:
 # The download formats /scan can render instead of the normal report shape,
 # mapped to (converter, file extension). Adding one here is all it takes: the
 # Query pattern, the cached path and the fresh path all read this table.
+#
+# "sbom" carries no converter because it is not a conversion of the report:
+# it is built from the scanned repository's own dependency manifests, fetched
+# while the request is being served. _download_response handles it separately.
 _DOWNLOAD_FORMATS = {
     "sarif": (convert_to_sarif, "sarif"),
     "cbom": (convert_to_cbom, "cbom.json"),
+    "sbom": (None, "sbom.json"),
 }
-_FORMAT_PATTERN = "^(?:sarif|cbom)$"
+_FORMAT_PATTERN = "^(?:sarif|cbom|sbom)$"
 
 
-def _download_response(report: dict, repo_url: str, format: str) -> JSONResponse:
-    """Render a report as a downloadable SARIF or CBOM file.
+async def _download_response(
+    report: dict, repo_url: str, format: str, request: Request, token: str
+) -> JSONResponse:
+    """Render a report as a downloadable SARIF, CBOM or SBOM file.
 
-    Named after the repo rather than a scan id: a cache hit belonging to another
-    user, or a scan whose cache write failed, has no id to name the file with.
+    Named after the repo rather than a scan id: a scan whose cache write
+    failed has no id to name the file with.
     """
     convert, extension = _DOWNLOAD_FORMATS[format]
     slug = repo_url.rstrip("/").rsplit("/", 2)[-2:]
     name = "-".join(part for part in slug if part) or "report"
+    if convert is not None:
+        content = convert(report)
+    else:
+        owner, repo = _sbom_repo(report, repo_url)
+        content = await generate_sbom(
+            owner,
+            repo,
+            report.get("languages_scanned") or [],
+            manifest_fetcher(owner, repo, token, request.app.state.github),
+        )
     return JSONResponse(
-        content=convert(report),
+        content=content,
         headers={
             "Content-Disposition": (
                 f'attachment; filename="qlint-scan-{name}.{extension}"'
             )
         },
+    )
+
+
+def _sbom_repo(report: dict, repo_url: str) -> tuple[str, str]:
+    """The (owner, repo) whose manifests an SBOM should be built from."""
+    try:
+        return parse_repo_url(repo_url)
+    except InvalidRepoURLError:
+        pass
+    name = str(report.get("repo") or "").strip("/")
+    if name.count("/") == 1 and all(part for part in name.split("/")):
+        owner, repo = name.split("/")
+        return owner, repo
+    raise HTTPException(
+        status_code=422,
+        detail="This scan has no GitHub repository to build an SBOM from",
     )
 
 
@@ -184,9 +225,11 @@ async def scan(
     format: str | None = Query(
         default=None,
         pattern=_FORMAT_PATTERN,
-        description="Set to 'sarif' for SARIF 2.1.0, or 'cbom' for a "
-        "CycloneDX 1.6 cryptography bill of materials, instead of the normal "
-        "report shape. Cached scans convert without re-scanning.",
+        description="Set to 'sarif' for SARIF 2.1.0, 'cbom' for a CycloneDX "
+        "1.6 cryptography bill of materials, or 'sbom' for a CycloneDX 1.6 "
+        "software bill of materials of the repository's declared "
+        "dependencies, instead of the normal report shape. Cached scans "
+        "convert without re-scanning.",
     ),
 ):
     token = _resolve_token(body, user)
@@ -197,23 +240,46 @@ async def scan(
         if cached:
             result = dict(cached["result"])
             if format:
-                # Neither download format carries cache metadata, so return
-                # the findings as they were stored rather than annotating them.
-                return _download_response(result, repo_url, format)
+                # No download format carries cache metadata, so return the
+                # findings as they were stored rather than annotating them.
+                return await _download_response(
+                    result, repo_url, format, request, token
+                )
             result["cached"] = True
             result["cached_at"] = _iso(cached["created_at"])
             result["cache_expires_at"] = _iso(cached["expires_at"])
-            # The cache is shared across users, so only hand back the scan id
-            # when this user owns the entry — /hndl/calculate and the history
-            # routes will not resolve someone else's id anyway. An entry the
-            # owner has deleted is skipped for the same reason: its result is
-            # still a valid cache hit, but handing back the id would put a scan
-            # they hid back in front of them behind a link that 404s.
+            # The cache is shared across users, but a scan record is not: every
+            # user-facing route (/user/scans/{id}/..., /hndl/calculate) resolves
+            # an id against the caller's own ownership, so handing back someone
+            # else's id would only ever 404.
+            #
+            # This used to mean returning no id at all, which is the bug this
+            # branch now fixes. A user who scanned a repo somebody else had
+            # already scanned got a result with no scan_id, so the UI had
+            # nothing to address and fell back to the format-rendering path --
+            # and every report download for that scan failed. Repositories the
+            # user owns on GitHub happen not to hit this, because nobody else
+            # scans them, which is what made the failure look like a permission
+            # problem about GitHub ownership. It never was one.
+            #
+            # So the requesting user gets a scan record of their own, holding
+            # the result they were just served. No re-scan and no GitHub quota
+            # spent: the cache still does its job, and the run now leaves the
+            # same trace in this user's history that any other scan does. The
+            # same applies to a cache hit on an entry this user has hidden --
+            # they asked for a scan and get a live record, rather than the one
+            # they deleted being silently handed back.
             if (
                 cached.get("user_id") == str(user["_id"])
                 and cached.get("deleted_at") is None
             ):
                 result["scan_id"] = str(cached["_id"])
+            else:
+                scan_id = await _cache_store(
+                    repo_url, dict(cached["result"]), user, cached.get("expires_at")
+                )
+                if scan_id:
+                    result["scan_id"] = scan_id
             return result
 
     start = time.perf_counter()
@@ -247,7 +313,7 @@ async def scan(
 
     scan_id = await _cache_store(repo_url, report, user)
     if format:
-        return _download_response(report, repo_url, format)
+        return await _download_response(report, repo_url, format, request, token)
     # None when the cache write failed (Mongo down): the scan itself succeeded,
     # but there is no stored document for that id to resolve against.
     if scan_id:
