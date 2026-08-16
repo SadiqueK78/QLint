@@ -36,6 +36,30 @@ DB_NAME = "qlint"
 # migration.
 VISIBLE_SCAN: dict = {"deleted_at": None}
 
+# What a document in the scans collection is a scan *of*.
+#
+# The collection held nothing but repository scans until Level 1 website
+# scanning landed, and the two are shaped differently in one load-bearing way:
+# a repository scan carries repo_url and a report grouped by file, a website
+# scan carries target_url and a flat report about a live host. Everything else
+# -- ownership, history, soft delete, the admin aggregates -- is meant to work
+# the same for both, which is why they share one collection rather than being
+# split into two.
+SCAN_TYPE_REPOSITORY = "repository"
+SCAN_TYPE_WEBSITE = "website"
+
+# The filter for "repository scans only", applied by every read whose answer
+# would be nonsense if a website scan were counted in it -- most-scanned-repos
+# above all, which groups on repo_url and would otherwise report a blank row.
+#
+# Spelled as "not a website" rather than "is a repository", and the difference
+# matters: every document written before scan_type existed has no scan_type
+# field at all, and in MongoDB an equality match on "repository" does not match
+# a missing field. {"$ne": "website"} does, so the whole existing history stays
+# in the aggregates without a migration -- the same reasoning that made
+# VISIBLE_SCAN match on null rather than on $exists.
+REPOSITORY_SCAN: dict = {"scan_type": {"$ne": SCAN_TYPE_WEBSITE}}
+
 _client: AsyncIOMotorClient | None = None
 _db: AsyncIOMotorDatabase | None = None
 

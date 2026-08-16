@@ -1374,21 +1374,16 @@ class TestTheSizeLimitEscapesTheStreamContext:
 
 
 class TestTheRouterIsRegistered:
-    def test_this_file_owns_the_complete_set_of_web_scan_routes(self):
-        """The newest phase's test file asserts the whole set, so that adding an
-        endpoint means editing the newest file rather than every older one. The
-        TLS and header files each assert only their own path and hand this
-        assertion forward; when a Phase 4 endpoint arrives, this test moves to
-        its file and this one narrows to "/web-scan/javascript" in paths.
+    def test_the_javascript_route_is_registered(self):
+        """Narrowed, as this test said it would be when a Phase 4 endpoint
+        arrived. The whole-set assertion now lives in the newest phase's file,
+        test_web_scan_combined.py, so adding an endpoint still means editing
+        one file rather than every older one.
         """
         paths = {
             route.path for route in web_scan_router.routes if hasattr(route, "path")
         }
-        assert paths == {
-            "/web-scan/tls",
-            "/web-scan/headers",
-            "/web-scan/javascript",
-        }
+        assert "/web-scan/javascript" in paths
 
     def test_the_endpoint_only_answers_post(self):
         methods = {

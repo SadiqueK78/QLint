@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from pymongo.errors import PyMongoError
 
 from auth import get_current_user, to_object_id
-from database import VISIBLE_SCAN, get_scans
+from database import SCAN_TYPE_WEBSITE, VISIBLE_SCAN, get_scans
 from hndl_calculator import (
     CRQC_SCENARIOS,
     DATA_SENSITIVITY_PROFILES,
@@ -49,6 +49,25 @@ async def calculate(body: HNDLRequest, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=503, detail=DB_UNAVAILABLE) from exc
     if not entry:
         raise HTTPException(status_code=404, detail="Scan not found")
+
+    # Repository scans only, and refused rather than answered.
+    #
+    # calculate_hndl_risk would not fail on a website scan: it reads
+    # result.severity_summary and result.findings_by_file, neither of which a
+    # combined website report has, and it degrades a malformed report to zero
+    # findings by design. So the answer would come back a confident "no
+    # exposure" -- for a site whose ECDHE handshake is the textbook
+    # harvest-now-decrypt-later target. A wrong answer delivered calmly is the
+    # worst outcome available here, so the route says what it cannot do.
+    if entry.get("scan_type") == SCAN_TYPE_WEBSITE:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "The HNDL calculator scores a repository scan: it works from "
+                "the critical findings in the code and how long migrating them "
+                "would take. It does not yet model a live website scan."
+            ),
+        )
 
     try:
         result = calculate_hndl_risk(

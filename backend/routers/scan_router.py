@@ -14,7 +14,7 @@ from pymongo import DESCENDING
 from pymongo.errors import PyMongoError
 
 from auth import get_current_user
-from database import get_scans, get_users
+from database import SCAN_TYPE_REPOSITORY, get_scans, get_users
 from github_client import (
     GitHubError,
     InvalidRepoURLError,
@@ -136,6 +136,12 @@ async def _cache_store(
     """
     now = datetime.now(timezone.utc)
     entry = {
+        # Stamped explicitly on every document this function writes, now that
+        # the collection also holds website scans. Purely additive: nothing
+        # about a repository scan changes, and the reads that care filter on
+        # database.REPOSITORY_SCAN, which is written to also match the
+        # documents from before this field existed.
+        "scan_type": SCAN_TYPE_REPOSITORY,
         "repo_url": repo_url,
         "scanned_by": user["email"],
         "user_id": str(user["_id"]),

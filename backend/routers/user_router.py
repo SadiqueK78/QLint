@@ -10,8 +10,8 @@ from pymongo import DESCENDING
 from pymongo.errors import PyMongoError
 
 from auth import get_current_user, to_object_id
-from database import VISIBLE_SCAN, get_scans
-from cbom_converter import convert_to_cbom
+from database import SCAN_TYPE_REPOSITORY, SCAN_TYPE_WEBSITE, VISIBLE_SCAN, get_scans
+from cbom_converter import convert_to_cbom, convert_website_to_cbom
 from github_client import InvalidRepoURLError, manifest_fetcher, parse_repo_url
 from sarif_converter import convert_to_sarif
 from sbom_converter import generate_sbom
@@ -52,11 +52,31 @@ def _algo_severity(result: dict) -> dict:
 
 
 def _summarize(entry: dict) -> dict:
-    """Reduce a stored scan to the fields the history list needs."""
+    """Reduce a stored scan to the fields the history list needs.
+
+    Both kinds of scan pass through here. The five report fields below are
+    shared -- a website scan's combined report carries pqc_readiness_score,
+    total_findings and algorithms_found under the same names a repository
+    report does, which is what lets one history list hold both -- and the two
+    that are not shared are additions rather than reinterpretations.
+
+    scan_type says which kind this row is, and target_url holds for a website
+    what repo_url holds for a repository. repo_url is left empty for a website
+    scan rather than filled with the site's URL: they are not the same thing,
+    and a caller that reads repo_url must never be handed something that is not
+    a repository. A row written before scan_type existed has no such field and
+    is a repository scan by definition, which is what the default says.
+
+    scanned_files and algo_severity stay repository-shaped and come back 0 and
+    {} for a website: neither has a meaning for a live site, and inventing one
+    would be worse than an empty value a renderer can hide.
+    """
     result = entry.get("result") or {}
     return {
         "id": str(entry["_id"]),
+        "scan_type": entry.get("scan_type", SCAN_TYPE_REPOSITORY),
         "repo_url": entry.get("repo_url", ""),
+        "target_url": entry.get("target_url", ""),
         "pqc_readiness_score": result.get("pqc_readiness_score", 0),
         "total_findings": result.get("total_findings", 0),
         "scanned_files": result.get("scanned_files", 0),
@@ -182,14 +202,41 @@ async def get_scan_full(scan_id: str, user: dict = Depends(get_current_user)):
     return result
 
 
+def _is_website(entry: dict) -> bool:
+    """Whether a stored scan is a website scan rather than a repository scan.
+
+    Read from scan_type, with anything else -- including the absent field on
+    every document written before website scanning existed -- meaning a
+    repository scan.
+    """
+    return entry.get("scan_type") == SCAN_TYPE_WEBSITE
+
+
 @router.get("/scans/{scan_id}/sarif")
 async def get_scan_sarif(scan_id: str, user: dict = Depends(get_current_user)):
     """The same report as /full, rendered as SARIF 2.1.0 for external tooling.
 
     Served as a download so a browser hitting this URL saves a .sarif file
     rather than rendering the JSON inline.
+
+    Repository scans only, and that is a property of SARIF rather than a gap
+    here. Every SARIF result is a physical location in an artifact -- a file
+    and a line -- which is what a code scanner produces and what Code Scanning
+    annotates a pull request from. A live website has no artifact to point at.
+    The converter would not fail on one; it would emit a document full of
+    locations that do not exist, which is worse. CBOM is the export that
+    applies to a website scan, and /cbom below serves it.
     """
     entry = await _owned_scan(scan_id, user)
+    if _is_website(entry):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "SARIF describes results at file locations in source code, "
+                "which a website scan does not have. Download this scan as a "
+                "CBOM instead."
+            ),
+        )
     sarif = convert_to_sarif(entry.get("result") or {})
     return JSONResponse(
         content=sarif,
@@ -211,9 +258,20 @@ async def get_scan_cbom(scan_id: str, user: dict = Depends(get_current_user)):
 
     Served as a download so a browser hitting this URL saves the file rather
     than rendering the JSON inline.
+
+    The one export that serves both kinds of scan, and the only one that could:
+    a CBOM answers "what cryptography is here", which is a question a live
+    website answers as readily as a checkout does. The difference is only where
+    an occurrence points -- a file and a line for a repository, the scanned URL
+    or a script's URL for a website -- so the two converters share everything
+    below that and produce the same CycloneDX 1.6 shape.
     """
     entry = await _owned_scan(scan_id, user)
-    cbom = convert_to_cbom(entry.get("result") or {})
+    result = entry.get("result") or {}
+    if _is_website(entry):
+        cbom = convert_website_to_cbom(result, entry.get("target_url") or "")
+    else:
+        cbom = convert_to_cbom(result)
     return JSONResponse(
         content=cbom,
         headers={
@@ -238,8 +296,25 @@ async def get_scan_sbom(
     stands rather than as it stood when the scan ran.
 
     Gated by the same scan-record ownership check as /sarif and /cbom.
+
+    Repository scans only, for the reason in the paragraph above rather than a
+    new one: an SBOM is an inventory of the dependencies a repository's
+    manifests declare, and a live website has no manifests. _repo_parts would
+    reach the same 422 by way of a website scan having no repo_url to parse,
+    but arriving there by accident would tell the caller the scan "has no
+    GitHub repository", which reads like a fixable problem with their scan.
+    Saying what is actually true is the better answer.
     """
     entry = await _owned_scan(scan_id, user)
+    if _is_website(entry):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "An SBOM inventories the dependencies a repository declares in "
+                "its manifests, which a website scan has no access to. "
+                "Download this scan as a CBOM instead."
+            ),
+        )
     result = entry.get("result") or {}
     owner, repo = _repo_parts(entry)
     sbom = await generate_sbom(

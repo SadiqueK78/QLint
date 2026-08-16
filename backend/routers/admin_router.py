@@ -1,12 +1,21 @@
 """Admin-only usage dashboard: aggregate stats, user list, scan list.
 
-Every query here reads the scans collection unfiltered, deliberately. A user's
-delete button is a soft delete (database.VISIBLE_SCAN) that hides a scan from
-their own history without removing the document, precisely so that what an
-operator sees does not move when a user tidies up their list. Do not add
-VISIBLE_SCAN to the queries below: total_scans, the per-repo and per-algorithm
-aggregates, and the severity totals are meant to describe everything QLint has
-ever run.
+No query here filters on visibility, deliberately. A user's delete button is a
+soft delete (database.VISIBLE_SCAN) that hides a scan from their own history
+without removing the document, precisely so that what an operator sees does not
+move when a user tidies up their list. Do not add VISIBLE_SCAN to the queries
+below: total_scans, the per-repo and per-algorithm aggregates, and the severity
+totals are meant to describe everything QLint has ever run.
+
+Three of them do filter on scan_type (database.REPOSITORY_SCAN), which is a
+different thing and not a weakening of the above. The collection holds website
+scans as well as repository scans now, and those three read fields only a
+repository scan has -- repo_url, result.findings_by_file,
+result.severity_summary. Grouping websites into "most scanned repositories"
+does not produce a smaller number, it produces a wrong one: a blank row that
+can outrank real repositories. The counts that are genuinely about "how much
+has this service done" -- total_scans, scans_today, scans_this_week -- stay
+unfiltered and count both kinds, because both kinds are scans.
 """
 
 import os
@@ -19,7 +28,7 @@ from pymongo import DESCENDING
 from pymongo.errors import PyMongoError
 
 from auth import get_admin_user, to_object_id
-from database import get_scans, get_users
+from database import REPOSITORY_SCAN, SCAN_TYPE_REPOSITORY, get_scans, get_users
 
 load_dotenv()
 
@@ -98,8 +107,15 @@ async def stats(admin: dict = Depends(get_admin_user)):
         # the reports a repeat scan would be served from cache right now.
         cached_scans = await scans.count_documents({"expires_at": {"$gt": now}})
 
+        # Repository scans only, and the $match is the whole reason: this
+        # groups on repo_url, which a website scan does not have. Without it
+        # every website scan ever run would collapse into a single _id: null
+        # row that renders as a blank repository and can outrank real ones.
+        # There is no "most scanned websites" here yet; not counting them is
+        # the correct answer for a list of repositories, not an omission.
         most_scanned = await scans.aggregate(
             [
+                {"$match": dict(REPOSITORY_SCAN)},
                 {"$group": {"_id": "$repo_url", "scan_count": {"$sum": 1}}},
                 {"$sort": {"scan_count": DESCENDING, "_id": 1}},
                 {"$limit": TOP_N},
@@ -112,8 +128,17 @@ async def stats(admin: dict = Depends(get_admin_user)):
 
         # findings_by_file is an object keyed by path, so convert it to an
         # array before unwinding down to individual findings.
+        #
+        # Repository scans only, for two reasons. findings_by_file is a
+        # repository report's shape -- a website report carries a flat findings
+        # list -- so $objectToArray would be handed a field that is not there,
+        # and a pipeline stage fed a missing document is not something to find
+        # out about in production. And the numbers would be wrong even if it
+        # ran: nothing under findings_by_file exists on a website scan, so a
+        # site full of vulnerable JavaScript would silently count as zero.
         algorithms = await scans.aggregate(
             [
+                {"$match": dict(REPOSITORY_SCAN)},
                 {"$project": {"files": {"$objectToArray": "$result.findings_by_file"}}},
                 {"$unwind": "$files"},
                 {"$unwind": "$files.v"},
@@ -130,8 +155,14 @@ async def stats(admin: dict = Depends(get_admin_user)):
             ]
         ).to_list(length=TOP_N)
 
+        # Repository scans only, so this total keeps meaning exactly what it
+        # meant before websites existed. result.severity_summary is a
+        # repository report's field; a website report has no such key, so an
+        # unfiltered $sum would quietly add zero per website today and start
+        # mixing two different counts the moment a website report grows one.
         severity_rows = await scans.aggregate(
             [
+                {"$match": dict(REPOSITORY_SCAN)},
                 {
                     "$group": {
                         "_id": None,
@@ -237,10 +268,20 @@ async def list_all_scans(
     entries = []
     for row in rows:
         result = row.get("result") or {}
+        # Deliberately unfiltered, like every other read in this file: an
+        # operator's list of what the service has run means all of it. What is
+        # added is the two fields that say which kind each row is. repo_url
+        # keeps its exact meaning and stays empty for a website scan rather
+        # than being filled with the site's URL -- a column named repo_url
+        # holding https://example.com is worse than an empty one, because
+        # nothing downstream can tell it apart from a real repository.
+        scan_type = row.get("scan_type", SCAN_TYPE_REPOSITORY)
         entries.append(
             {
                 "id": str(row["_id"]),
+                "scan_type": scan_type,
                 "repo_url": row.get("repo_url", ""),
+                "target_url": row.get("target_url", ""),
                 "scanned_by": row.get("scanned_by", "anonymous"),
                 "pqc_readiness_score": result.get("pqc_readiness_score", 0),
                 "total_findings": result.get("total_findings", 0),

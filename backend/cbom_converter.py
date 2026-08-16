@@ -168,7 +168,15 @@ def _canonical_name(algorithm: str) -> str:
     return algorithm
 
 
-def _primitive(name: str) -> str:
+def _primitive(name: str, extra: dict[str, str] | None = None) -> str:
+    """The CycloneDX primitive for an algorithm name.
+
+    `extra` is consulted first and is how a scan type contributes a primitive
+    the code scanners never produce, without widening the shared table -- which
+    would change what an existing repository scan converts to.
+    """
+    if extra and name in extra:
+        return extra[name]
     return _PRIMITIVES.get(name, "unknown")
 
 
@@ -239,8 +247,10 @@ def _bom_ref(name: str) -> str:
     return f"crypto/{slug or 'unknown'}"
 
 
-def _component(name: str, findings: list[dict]) -> dict:
-    primitive = _primitive(name)
+def _component(
+    name: str, findings: list[dict], extra_primitives: dict[str, str] | None = None
+) -> dict:
+    primitive = _primitive(name, extra_primitives)
     algorithm_properties: dict = {"primitive": primitive}
 
     parameter_set = _PARAMETER_SETS.get(name)
@@ -269,19 +279,28 @@ def _component(name: str, findings: list[dict]) -> dict:
     }
 
 
-def _group(scan_report: dict) -> dict[str, list[dict]]:
+def _group_findings(findings) -> dict[str, list[dict]]:
     """Findings bucketed by canonical algorithm name.
 
     This is what makes one algorithm one component: forty RSA findings across
     twelve files collapse into a single RSA entry carrying forty occurrences.
+
+    Takes an iterable rather than a report so the website path can hand it
+    findings it has already restated (see _website_findings) without a second
+    copy of the bucketing rule.
     """
     grouped: dict[str, list[dict]] = {}
-    for finding in iter_findings(scan_report):
+    for finding in findings:
         algorithm = _text(finding.get("algorithm"))
         if not algorithm or _NOT_AN_ASSET in algorithm:
             continue
         grouped.setdefault(_canonical_name(algorithm), []).append(finding)
     return grouped
+
+
+def _group(scan_report: dict) -> dict[str, list[dict]]:
+    """The repository path's grouping: every finding in either report shape."""
+    return _group_findings(iter_findings(scan_report))
 
 
 def _timestamp(scan_report: dict) -> str:
@@ -311,36 +330,27 @@ def _subject_name(scan_report: dict) -> str:
     return "unknown"
 
 
-def convert_to_cbom(scan_report: dict) -> dict:
-    """Convert a QLint scan report into a CycloneDX 1.6 CBOM.
-
-    Accepts either report shape (findings_by_file or a flat findings list).
-    One component per distinct algorithm, each carrying every location it was
-    seen at. An empty or missing set of findings still produces a valid
-    document, with an empty components array.
-
-    Never raises. A finding that cannot be converted is skipped rather than
-    failing the whole document.
-    """
-    try:
-        grouped = _group(scan_report)
-    except Exception:
-        grouped = {}
-
+def _components(
+    grouped: dict[str, list[dict]], extra_primitives: dict[str, str] | None = None
+) -> list[dict]:
+    """One component per algorithm, in name order, skipping any that fail."""
     components: list[dict] = []
     for name in sorted(grouped):
         try:
-            components.append(_component(name, grouped[name]))
+            components.append(_component(name, grouped[name], extra_primitives))
         except Exception:
             continue  # one bad group must not cost the whole inventory
+    return components
 
-    try:
-        timestamp = _timestamp(scan_report)
-        subject = _subject_name(scan_report)
-    except Exception:
-        timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        subject = "unknown"
 
+def _document(components: list[dict], timestamp: str, subject: str) -> dict:
+    """The CycloneDX envelope every CBOM this module emits is wrapped in.
+
+    Extracted so the website path cannot drift from the repository path on the
+    parts that have nothing to do with where the findings came from -- the
+    format markers, the tool block, the metadata shape. Both callers build the
+    same document; only the components, the timestamp and the subject differ.
+    """
     return {
         "bomFormat": BOM_FORMAT,
         "specVersion": SPEC_VERSION,
@@ -362,6 +372,170 @@ def convert_to_cbom(scan_report: dict) -> dict:
         },
         "components": components,
     }
+
+
+def convert_to_cbom(scan_report: dict) -> dict:
+    """Convert a QLint scan report into a CycloneDX 1.6 CBOM.
+
+    Accepts either report shape (findings_by_file or a flat findings list).
+    One component per distinct algorithm, each carrying every location it was
+    seen at. An empty or missing set of findings still produces a valid
+    document, with an empty components array.
+
+    Never raises. A finding that cannot be converted is skipped rather than
+    failing the whole document.
+    """
+    try:
+        grouped = _group(scan_report)
+    except Exception:
+        grouped = {}
+
+    components = _components(grouped)
+
+    try:
+        timestamp = _timestamp(scan_report)
+        subject = _subject_name(scan_report)
+    except Exception:
+        timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        subject = "unknown"
+
+    return _document(components, timestamp, subject)
+
+
+# ---------------------------------------------------------------------------
+# Website scans
+# ---------------------------------------------------------------------------
+#
+# A Level 1 website scan reports on a live host, so the two fields a repository
+# occurrence is built from -- a file path and a line number -- describe nothing
+# that exists. What replaces them is the only location a live scan actually
+# has: the URL that was scanned, or, for a finding in the page's JavaScript,
+# the URL of the script it came from.
+#
+# Everything else is deliberately the repository path's machinery, unchanged:
+# the same grouping rule, the same component shape, the same envelope. A CBOM
+# is meant to be one inventory format, and an RSA key found on a live
+# certificate is the same cryptographic asset as an RSA key found in source.
+#
+# Only CBOM is extended to websites, and that is a scope decision rather than
+# an omission. SARIF describes results at file locations in source code and an
+# SBOM is a manifest of declared software dependencies; neither has a meaning
+# for a host that is being talked to over the network.
+
+# The category a merged website finding carries when it came from the page's
+# JavaScript. Those are the only website findings with a location of their own.
+WEBSITE_JAVASCRIPT_CATEGORY = "JavaScript"
+
+# A TLS protocol version is not an algorithm. CycloneDX models one as a
+# component with assetType "protocol" and its own protocolProperties, which
+# this phase does not add -- so rather than filing "TLS 1.3" as an algorithm
+# with primitive "unknown", it is left out. Nothing is lost from the inventory:
+# what the version implies about the connection's cryptography is already
+# carried by the key exchange and cipher suite findings, which are algorithms.
+_PROTOCOL_FINDING_TYPE = "Protocol"
+
+# Primitives for the algorithms only a live scan ever names, kept out of the
+# shared _PRIMITIVES table on purpose: adding an entry there would change what
+# an existing repository scan converts to, and this path must not.
+#
+# ChaCha20 is the whole list. It has no CRYPTO_DB entry because no code scanner
+# has ever had to name it -- it is a TLS cipher suite component rather than
+# something found in source -- but a real handshake negotiates it constantly,
+# which is why tls_scanner carries a local stand-in entry for it.
+_WEBSITE_PRIMITIVES: dict[str, str] = {
+    "ChaCha20": "stream-cipher",
+}
+
+
+def _website_location(finding: dict, target_url: str) -> str:
+    """Where a website finding was observed, in place of a file path.
+
+    A JavaScript finding already knows: js_web_scanner puts the script's own
+    URL, or "inline script #N" for one written into the page, in `file`.
+    Everything else -- the transport, the certificate -- was observed at the
+    site itself, so it is located by the URL that was scanned.
+    """
+    if _text(finding.get("category")) == WEBSITE_JAVASCRIPT_CATEGORY:
+        located = _text(finding.get("file"))
+        if located:
+            return located
+    return _text(target_url, "unknown")
+
+
+def _website_findings(scan_report: dict, target_url: str) -> list[dict]:
+    """Website findings restated in the shape the repository path groups.
+
+    Two changes and one exclusion. `file` is rewritten to the web location,
+    and `line` is dropped entirely rather than defaulted -- there is no line
+    number to have, and _occurrences omits the field when there is no usable
+    one, which is what keeps the document from asserting a position nobody
+    measured. Protocol findings are dropped, for the reason above.
+
+    HTTP header findings need no handling here: they carry no `algorithm`, so
+    _group_findings already skips them. That is correct rather than lucky --
+    a missing Referrer-Policy is a security finding, not a cryptographic asset,
+    and a bill of materials that listed it would be listing a part that does
+    not exist.
+    """
+    findings: list[dict] = []
+    for finding in iter_findings(scan_report):
+        if _text(finding.get("type")) == _PROTOCOL_FINDING_TYPE:
+            continue
+        located = {key: value for key, value in finding.items() if key != "line"}
+        located["file"] = _website_location(finding, target_url)
+        findings.append(located)
+    return findings
+
+
+def _website_timestamp(scan_report: dict) -> str:
+    """When the website scan ran.
+
+    Prefers the report's own scanned_at, which a combined web scan stamps at
+    the time it ran, and falls back to the shared resolution -- the stored
+    document's created_at, then now.
+    """
+    if isinstance(scan_report, dict):
+        scanned_at = _text(scan_report.get("scanned_at"))
+        if scanned_at:
+            return scanned_at
+    return _timestamp(scan_report)
+
+
+def convert_website_to_cbom(scan_report: dict, target_url: str = "") -> dict:
+    """Convert a Level 1 website scan report into a CycloneDX 1.6 CBOM.
+
+    The sibling of convert_to_cbom, sharing everything below the location: one
+    cryptographic-asset component per distinct algorithm, each carrying every
+    place it was seen, in the same 1.6 shape. What differs is that an
+    occurrence names a URL rather than a file and a line.
+
+    `target_url` is the site that was scanned. It is also read from the
+    report's own `url` when the caller does not pass one, so a stored report
+    converts without the caller having to carry the URL alongside it.
+
+    Never raises, on the same terms as convert_to_cbom: this backs a download
+    route, and a malformed report must yield a thin CBOM rather than a 500.
+    """
+    try:
+        subject = _text(target_url) or _text(
+            (scan_report or {}).get("url") if isinstance(scan_report, dict) else ""
+        ) or "unknown"
+    except Exception:
+        subject = "unknown"
+
+    try:
+        grouped = _group_findings(_website_findings(scan_report, subject))
+    except Exception:
+        grouped = {}
+
+    components = _components(grouped, _WEBSITE_PRIMITIVES)
+
+    try:
+        timestamp = _website_timestamp(scan_report)
+    except Exception:
+        timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    return _document(components, timestamp, subject)
 
 
 if __name__ == "__main__":
