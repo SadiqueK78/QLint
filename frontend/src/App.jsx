@@ -7,8 +7,10 @@ import Help from "./Help";
 import Terms from "./Terms";
 import Privacy from "./Privacy";
 import { CopyButton, FixPanels } from "./FixPanels";
+import WebsiteResultsView from "./WebsiteResults";
 import { ChevronIcon } from "./icons";
 import { API_BASE } from "./api";
+import { formatDateTime, scoreClass } from "./format";
 
 // The app is a single view-switcher, so "routing" here is just the paths that
 // have to be linkable from outside: the scanner and the standalone pages.
@@ -59,6 +61,51 @@ const FILTER_TABS = [
 
 const TOKEN_KEY = "qlint_token";
 const GITHUB_LOGIN_URL = `${API_BASE}/auth/github/login`;
+
+// What the scan box is pointed at. A select beside the input rather than tabs
+// or a second page: the two modes take one text field and one button between
+// them, and the only thing that differs is what the text is expected to be --
+// which is exactly what a select in front of the field says. Guessing from the
+// input instead would mean github.com's own site could never be scanned as a
+// website.
+//
+// `repository` is the default and is the flow that existed before this: every
+// piece of repository behaviour below is reached by that value and nothing
+// else. SCAN_TYPE_WEBSITE matches the scan_type the backend stores, so a
+// history row's kind and the picker's value are the same word.
+const SCAN_MODE_REPOSITORY = "repository";
+const SCAN_MODE_WEBSITE = "website";
+
+const SCAN_MODES = [
+  {
+    value: SCAN_MODE_REPOSITORY,
+    label: "Repository",
+    inputLabel: "Enter GitHub repository URL",
+    placeholder: "https://github.com/username/repository",
+    button: "Scan Repository",
+    signedOutTitle: "Sign in to scan a repository",
+    signedInTitle: "Scan this repository",
+    signInPrompt: "Sign in to scan a repository.",
+    privacyNote:
+      "We only read public repositories. Your code is never stored on our servers.",
+  },
+  {
+    value: SCAN_MODE_WEBSITE,
+    label: "Website",
+    inputLabel: "Enter website URL",
+    placeholder: "https://example.com",
+    button: "Scan Website",
+    signedOutTitle: "Sign in to scan a website",
+    signedInTitle: "Scan this website",
+    signInPrompt: "Sign in to scan a website.",
+    privacyNote:
+      "We read what a browser reads: the TLS handshake, the response headers, and the scripts the page references. Websites are limited to 5 scans a day.",
+  },
+];
+
+function scanModeConfig(mode) {
+  return SCAN_MODES.find((entry) => entry.value === mode) ?? SCAN_MODES[0];
+}
 
 // The callback redirects here with one of these codes when sign-in did not
 // complete. Each one has a different fix, so each gets its own sentence
@@ -130,21 +177,6 @@ function relativeTime(iso) {
   if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
   const days = Math.round(hours / 24);
   return `${days} day${days === 1 ? "" : "s"} ago`;
-}
-
-function formatDateTime(iso) {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "";
-  const day = date.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-  const time = date.toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-  });
-  return `${day} at ${time}`;
 }
 
 function Logo({ onGoHome }) {
@@ -736,6 +768,8 @@ function RateLimitBar({ rateLimit, statusFailed }) {
 }
 
 function ScanInputCard({
+  scanMode,
+  setScanMode,
   repoUrl,
   setRepoUrl,
   githubToken,
@@ -752,7 +786,13 @@ function ScanInputCard({
   user,
   onSignIn,
 }) {
-  const rateTooLow = rateLimit != null && rateLimit.remaining < 100;
+  const mode = scanModeConfig(scanMode);
+  const website = scanMode === SCAN_MODE_WEBSITE;
+  // The GitHub API budget is spent by repository scans and by nothing else, so
+  // in website mode it neither shows nor blocks: a site scan never touches
+  // github.com, and a low GitHub allowance greying out its button would be a
+  // limit reported against the wrong thing.
+  const rateTooLow = !website && rateLimit != null && rateLimit.remaining < 100;
   // A connected GitHub account supplies the credential, so the manual token
   // field is redundant.
   const usingConnectedGithub = !!user?.github_connected;
@@ -763,8 +803,21 @@ function ScanInputCard({
   return (
     <section className="scan-section" id="scan-input">
       <div className="scan-card">
-        <div className="scan-label">Enter GitHub repository URL</div>
+        <div className="scan-label">{mode.inputLabel}</div>
         <div className="scan-row">
+          <select
+            className="scan-mode-select"
+            value={scanMode}
+            onChange={(e) => setScanMode(e.target.value)}
+            aria-label="What to scan"
+            title="Choose whether to scan a repository or a live website"
+          >
+            {SCAN_MODES.map((entry) => (
+              <option value={entry.value} key={entry.value}>
+                {entry.label}
+              </option>
+            ))}
+          </select>
           <input
             className="scan-input"
             type="text"
@@ -773,9 +826,9 @@ function ScanInputCard({
             onKeyDown={(e) => {
               if (e.key === "Enter") onScan();
             }}
-            placeholder="https://github.com/username/repository"
+            placeholder={mode.placeholder}
           />
-          {!usingConnectedGithub && (
+          {!usingConnectedGithub && !website && (
             <button
               className="token-toggle"
               type="button"
@@ -789,11 +842,9 @@ function ScanInputCard({
             type="button"
             onClick={onScan}
             disabled={scanning || rateTooLow}
-            title={
-              signedOut ? "Sign in to scan a repository" : "Scan this repository"
-            }
+            title={signedOut ? mode.signedOutTitle : mode.signedInTitle}
           >
-            {signedOut ? "Sign in to scan" : "Scan Repository"}
+            {signedOut ? "Sign in to scan" : mode.button}
           </button>
         </div>
         {urlError && <p className="url-error">{urlError}</p>}
@@ -807,12 +858,12 @@ function ScanInputCard({
             to get started.
           </p>
         )}
-        {usingConnectedGithub && (
+        {usingConnectedGithub && !website && (
           <p className="gh-using-note">
             Using your connected GitHub account for API access
           </p>
         )}
-        {tokenVisible && !usingConnectedGithub && (
+        {tokenVisible && !usingConnectedGithub && !website && (
           <div className="token-section">
             <div className="token-label">GitHub Personal Access Token</div>
             <input
@@ -828,7 +879,10 @@ function ScanInputCard({
             </p>
           </div>
         )}
-        <RateLimitBar rateLimit={rateLimit} statusFailed={statusFailed} />
+        {/* The GitHub API budget, which only a repository scan spends. */}
+        {!website && (
+          <RateLimitBar rateLimit={rateLimit} statusFailed={statusFailed} />
+        )}
       </div>
       {error && (
         <div className="error-card">
@@ -839,10 +893,7 @@ function ScanInputCard({
           </button>
         </div>
       )}
-      <p className="privacy-note">
-        We only read public repositories. Your code is never stored on our
-        servers.
-      </p>
+      <p className="privacy-note">{mode.privacyNote}</p>
     </section>
   );
 }
@@ -927,18 +978,32 @@ function LanguagesStrip() {
   );
 }
 
-function ScanningView({ repoUrl, onCancel }) {
+function ScanningView({ repoUrl, scanMode = SCAN_MODE_REPOSITORY, onCancel }) {
+  // The website scan runs its three checks concurrently and each has its own
+  // timeout, so what it is waiting on and how long for are both different from
+  // a repository scan's file walk.
+  const website = scanMode === SCAN_MODE_WEBSITE;
   return (
     <div className="scanning-wrap">
       <div className="scanning-card">
-        <div className="scanning-label">Scanning repository</div>
-        <div className="scanning-repo">{repoNameFromUrl(repoUrl)}</div>
+        <div className="scanning-label">
+          {website ? "Scanning website" : "Scanning repository"}
+        </div>
+        <div className="scanning-repo">
+          {website ? repoUrl : repoNameFromUrl(repoUrl)}
+        </div>
         <div className="progress">
           <div className="progress-inner" />
         </div>
-        <p className="scanning-status">Fetching repository files...</p>
+        <p className="scanning-status">
+          {website
+            ? "Checking TLS, response headers, and page scripts..."
+            : "Fetching repository files..."}
+        </p>
         <p className="scanning-note">
-          This typically takes 10 to 30 seconds depending on repository size.
+          {website
+            ? "This typically takes 5 to 20 seconds depending on how much JavaScript the page loads."
+            : "This typically takes 10 to 30 seconds depending on repository size."}
         </p>
         <button
           className="scanning-cancel"
@@ -951,12 +1016,6 @@ function ScanningView({ repoUrl, onCancel }) {
       </div>
     </div>
   );
-}
-
-function scoreClass(score) {
-  if (score < 40) return "score-critical";
-  if (score < 70) return "score-warning";
-  return "score-safe";
 }
 
 function buildReportText(result) {
@@ -2448,7 +2507,14 @@ function HistoryPanel({ scans, loading, error, onGoHome, onOpen, onDelete }) {
 
         {!loading &&
           !error &&
-          scans.map((scan) => (
+          scans.map((scan) => {
+            // A website scan has no repo_url -- the backend leaves it empty and
+            // puts the site in target_url -- so the owner/repo shortening that
+            // names a repository row would have been handed "" and printed "".
+            // scan_type says which field holds the target; a row written before
+            // website scanning existed has no such field and is a repository.
+            const website = scan.scan_type === SCAN_MODE_WEBSITE;
+            return (
             <div
               className="history-card"
               key={scan.id}
@@ -2456,7 +2522,7 @@ function HistoryPanel({ scans, loading, error, onGoHome, onOpen, onDelete }) {
             >
               <div className="history-card-top">
                 <span className="history-repo">
-                  {repoNameFromUrl(scan.repo_url)}
+                  {website ? scan.target_url : repoNameFromUrl(scan.repo_url)}
                 </span>
                 <button
                   className="icon-btn icon-btn-danger"
@@ -2479,8 +2545,11 @@ function HistoryPanel({ scans, loading, error, onGoHome, onOpen, onDelete }) {
                 >
                   Score: {scan.pqc_readiness_score}/100
                 </span>
+                {/* scanned_files is a repository count and comes back 0 for a
+                    website, where there are no files to have walked. The row
+                    says what kind of scan it was instead. */}
                 <span className="history-stat">
-                  {scan.scanned_files} files
+                  {website ? "Website" : `${scan.scanned_files} files`}
                 </span>
                 <span className="history-stat">
                   {scan.total_findings} findings
@@ -2505,7 +2574,8 @@ function HistoryPanel({ scans, loading, error, onGoHome, onOpen, onDelete }) {
                 {scan.cached ? " (cached)" : ""}
               </div>
             </div>
-          ))}
+            );
+          })}
       </div>
     </div>
   );
@@ -2797,10 +2867,17 @@ export default function App() {
   const [route, setRoute] = useState(() => window.location.pathname);
   const [view, setView] = useState("input");
   const [theme, setTheme] = useState("light");
+  // What the scan box is pointed at. The repository flow is the default, so
+  // nothing about it changes until this is deliberately switched.
+  const [scanMode, setScanMode] = useState(SCAN_MODE_REPOSITORY);
   const [repoUrl, setRepoUrl] = useState("");
   const [githubToken, setGithubToken] = useState("");
   const [tokenVisible, setTokenVisible] = useState(false);
   const [scanResult, setScanResult] = useState(null);
+  // Which view the result in hand belongs to. Kept beside the result rather
+  // than read from scanMode, because the picker can be moved while a report is
+  // on screen and the report must not change shape underneath the reader.
+  const [resultKind, setResultKind] = useState(SCAN_MODE_REPOSITORY);
   const [error, setError] = useState(null);
   const [rateLimit, setRateLimit] = useState(null);
   const [statusFailed, setStatusFailed] = useState(false);
@@ -3061,8 +3138,15 @@ export default function App() {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      setRepoUrl(scan.repo_url);
+      // /full serves back whatever was stored, so the report's shape follows
+      // the row's kind: a website scan opens the website view, and the target
+      // it names comes from target_url rather than the repo_url a website scan
+      // does not have.
+      const website = scan.scan_type === SCAN_MODE_WEBSITE;
+      setRepoUrl((website ? scan.target_url : scan.repo_url) || "");
+      setScanMode(website ? SCAN_MODE_WEBSITE : SCAN_MODE_REPOSITORY);
       setScanResult(data);
+      setResultKind(website ? SCAN_MODE_WEBSITE : SCAN_MODE_REPOSITORY);
       // Every file starts collapsed: the report opens as a list of files
       // and their counts, and a file is only unpacked when asked for.
       setExpandedFiles({});
@@ -3216,18 +3300,38 @@ export default function App() {
     }
   };
 
+  // Both modes come through here rather than through a handler each. Only the
+  // validation rule and the request differ; the sign-in gate, the expired
+  // session, the 429 the rate limiter answers with, the unreachable backend and
+  // the cancel are one path, because two copies of that path is how a fix to
+  // one of them stops applying to the other.
   const handleScan = async (forceRefresh = false) => {
     setUrlError(null);
     setError(null);
-    // The backend 401s an unauthenticated /scan, so stop here rather than
-    // firing a request that cannot succeed: the login modal is this app's
-    // equivalent of a redirect to a sign-in page.
+    const website = scanMode === SCAN_MODE_WEBSITE;
+    const mode = scanModeConfig(scanMode);
+    // The backend 401s an unauthenticated /scan and /web-scan alike, so stop
+    // here rather than firing a request that cannot succeed: the login modal is
+    // this app's equivalent of a redirect to a sign-in page.
     if (!authToken) {
-      requireLogin("Sign in to scan a repository.");
+      requireLogin(mode.signInPrompt);
       return;
     }
     const trimmed = repoUrl.trim();
-    if (!trimmed.startsWith("https://github.com/")) {
+    if (website) {
+      // Only the scheme is checked here, and only because ssrf_guard rejects
+      // anything else outright -- an http:// target has no TLS to report on, so
+      // sending it would spend one of five daily scans to be told so. Every
+      // other judgement about the target (its hostname, where it resolves to,
+      // whether QLint will connect there at all) belongs to the guard, and
+      // second-guessing it in the browser is how the two would drift apart.
+      if (!/^https:\/\/[^/\s]+/i.test(trimmed)) {
+        setUrlError(
+          "Please enter a website URL starting with https://, for example https://example.com"
+        );
+        return;
+      }
+    } else if (!trimmed.startsWith("https://github.com/")) {
       setUrlError("Please enter a valid GitHub repository URL");
       return;
     }
@@ -3238,10 +3342,10 @@ export default function App() {
     scanAbortRef.current = controller;
     setView("scanning");
     try {
-      const post = (body) => {
+      const post = (path, body) => {
         const headers = { "Content-Type": "application/json" };
         if (authToken) headers.Authorization = `Bearer ${authToken}`;
-        return fetch(`${API_BASE}/scan`, {
+        return fetch(`${API_BASE}${path}`, {
           method: "POST",
           headers,
           body: JSON.stringify(body),
@@ -3249,12 +3353,18 @@ export default function App() {
         });
       };
 
-      const base = { repo_url: trimmed, force_refresh: forceRefresh };
-      let res = await post(
-        githubToken ? { ...base, github_token: githubToken } : base
-      );
-      if (res.status === 422 && githubToken) {
-        res = await post(base);
+      let res;
+      if (website) {
+        res = await post("/web-scan", { url: trimmed });
+      } else {
+        const base = { repo_url: trimmed, force_refresh: forceRefresh };
+        res = await post(
+          "/scan",
+          githubToken ? { ...base, github_token: githubToken } : base
+        );
+        if (res.status === 422 && githubToken) {
+          res = await post("/scan", base);
+        }
       }
 
       const data = await res.json().catch(() => null);
@@ -3278,6 +3388,7 @@ export default function App() {
       }
 
       setScanResult(data);
+      setResultKind(website ? SCAN_MODE_WEBSITE : SCAN_MODE_REPOSITORY);
       // Every file starts collapsed: the report opens as a list of files
       // and their counts, and a file is only unpacked when asked for.
       setExpandedFiles({});
@@ -3333,6 +3444,10 @@ export default function App() {
     setGithubToken("");
     setTokenVisible(false);
     setScanResult(null);
+    // The picker itself is deliberately not reset: "Scan Another Site" should
+    // land back on the site form, not silently on the repository one. Only the
+    // kind of the report being cleared goes back to the default.
+    setResultKind(SCAN_MODE_REPOSITORY);
     setActiveFilter("all");
     setActiveAlgo(null);
     setExpandedFiles({});
@@ -3398,6 +3513,8 @@ export default function App() {
             <>
               <Hero />
               <ScanInputCard
+                scanMode={scanMode}
+                setScanMode={setScanMode}
                 repoUrl={repoUrl}
                 setRepoUrl={setRepoUrl}
                 githubToken={githubToken}
@@ -3410,7 +3527,7 @@ export default function App() {
                 scanning={false}
                 onScan={() => handleScan(false)}
                 user={user}
-                onSignIn={() => requireLogin("Sign in to scan a repository.")}
+                onSignIn={() => requireLogin(scanModeConfig(scanMode).signInPrompt)}
                 error={error}
                 onClearError={() => setError(null)}
               />
@@ -3418,9 +3535,27 @@ export default function App() {
             </>
           )}
           {!activePage && view === "scanning" && (
-            <ScanningView repoUrl={repoUrl} onCancel={cancelScan} />
+            <ScanningView
+              repoUrl={repoUrl}
+              scanMode={scanMode}
+              onCancel={cancelScan}
+            />
           )}
-          {!activePage && view === "results" && scanResult && (
+          {/* Two reports, two views. The shapes have almost nothing in common
+              -- one is findings_by_file over a repository, the other is four
+              categories and a script inventory over a live site -- so which one
+              renders is decided here rather than inside a view asked to draw
+              both. */}
+          {!activePage &&
+            view === "results" &&
+            scanResult &&
+            resultKind === SCAN_MODE_WEBSITE && (
+              <WebsiteResultsView result={scanResult} onReset={handleReset} />
+            )}
+          {!activePage &&
+            view === "results" &&
+            scanResult &&
+            resultKind !== SCAN_MODE_WEBSITE && (
             <ResultsView
               result={scanResult}
               activeFilter={activeFilter}

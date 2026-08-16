@@ -41,7 +41,12 @@ function familyLabel(family) {
 // prose was crowding out the numbers this page exists to show. Same
 // button-plus-chevron shape as the Help accordion, so a disclosure behaves the
 // same wherever it appears.
-function Disclosure({ label, children }) {
+//
+// Exported because the website results view groups its findings into one of
+// these per category. It is the same component rather than a second one with
+// the same shape: two disclosure implementations is exactly how a chevron ends
+// up rotating one way on one page and the other way on the next.
+export function Disclosure({ label, children }) {
   const [open, setOpen] = useState(false);
   return (
     <div className={`pqc-disclosure${open ? " pqc-disclosure-open" : ""}`}>

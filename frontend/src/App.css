@@ -4072,3 +4072,150 @@ input {
   background: #ffffff;
   transform: translateX(16px);
 }
+
+/* ------------------------------------------------- website scan: input */
+
+/* The scan-mode picker, sitting in front of the URL field. Sized and outlined
+   like .token-toggle -- the other control that shares the scan row -- so the
+   row reads as one strip rather than a select dropped into it. */
+.scan-mode-select {
+  height: 44px;
+  flex-shrink: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  padding: 0 10px;
+  cursor: pointer;
+  outline: none;
+}
+
+.scan-mode-select:focus {
+  border-color: var(--navy);
+  box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.08);
+}
+
+/* ------------------------------------------------ website scan: report */
+
+/* The partial-report banner. Warning colours rather than critical: the scan
+   did produce a report, and painting it red would say the request failed when
+   what happened is that part of it did. */
+.web-warning {
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-lg);
+  padding: 16px 20px;
+  margin-bottom: 24px;
+}
+
+.web-warning-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--warning);
+}
+
+.web-warning-list {
+  margin: 10px 0 0;
+  padding-left: 20px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.web-warning-scan {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.web-warning-note {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-muted);
+  margin: 10px 0 0;
+}
+
+.web-section {
+  margin-top: 28px;
+}
+
+/* Sits opposite the section label on the same line, in the same muted register
+   as .results-meta: a count, not a heading. */
+.web-section-count {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.web-section-blurb {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0 0 12px;
+}
+
+.web-section-note {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0;
+  line-height: 1.6;
+}
+
+/* The disclosure component comes from the benchmark page, where it sits in a
+   780px reading column. Here it holds finding cards in the full 1280px results
+   width, so the wrapper widens it rather than the component learning about a
+   second context. */
+.web-disclosures .pqc-disclosure {
+  max-width: none;
+  margin: 0 0 12px;
+}
+
+/* Findings inside a disclosure already have the disclosure's border around
+   them, so the card stack drops its own. */
+.web-disclosures .web-finding-list {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+
+.web-disclosures .web-finding-list .finding {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* The middle line of a website finding card: what kind of asset it is, what it
+   is for, and the algorithm behind it, joined into one muted line rather than
+   a label per field. */
+.web-finding-facts {
+  font-size: 12px;
+  font-family: var(--mono);
+  color: var(--text-muted);
+  margin: 6px 0 0;
+  word-break: break-word;
+}
+
+/* A script URL can be far longer than an algorithm name, which is what
+   .finding-algo is sized for. */
+.web-ref-source {
+  font-weight: 500;
+  font-size: 13px;
+  word-break: break-all;
+}
+
+/* ------------------------------------- website scan: dark theme */
+
+[data-theme="dark"] .scan-mode-select {
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.25);
+  background: var(--surface);
+}
+
+[data-theme="dark"] .scan-mode-select:focus {
+  border-color: #00ff41;
+  box-shadow: 0 0 0 3px rgba(0, 255, 65, 0.12);
+}
+
+/* .web-warning needs no dark rule of its own: it is painted entirely from
+   --warning-bg / --warning-border / --warning, all three of which the dark
+   theme already redefines. */
