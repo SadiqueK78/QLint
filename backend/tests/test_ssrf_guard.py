@@ -115,9 +115,12 @@ class TestParseTarget:
         with pytest.raises(InvalidTargetURLError):
             parse_target("https://real.example.com@169.254.169.254/")
 
-    def test_a_non_443_port_is_refused(self):
+    def test_a_port_outside_the_allowlist_is_refused(self):
+        """8443 is now allowed -- see TestTheAllowedPorts. A port that is not
+        in the allowlist is still refused, which is what stops this scanner
+        being pointed at arbitrary ports on a host."""
         with pytest.raises(InvalidTargetURLError) as raised:
-            parse_target("https://example.com:8443")
+            parse_target("https://example.com:8080")
         assert "443" in str(raised.value)
 
     def test_an_explicit_443_is_accepted(self):

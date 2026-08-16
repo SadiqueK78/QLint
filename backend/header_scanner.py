@@ -286,7 +286,7 @@ def summarize(findings: list[dict]) -> dict:
     }
 
 
-def _describe_failure(exc: Exception, hostname: str) -> str:
+def _describe_failure(exc: Exception, hostname: str, port: int = HTTPS_PORT) -> str:
     """One sentence naming what failed, with nothing internal in it.
 
     Mirrors tls_scanner's function of the same name, and exists for the same
@@ -310,7 +310,7 @@ def _describe_failure(exc: Exception, hostname: str) -> str:
         )
     if isinstance(exc, httpx.ConnectError):
         return (
-            f"Could not connect to {hostname} on port {HTTPS_PORT}: the host "
+            f"Could not connect to {hostname} on port {port}: the host "
             "refused the connection or is unreachable."
         )
     if isinstance(exc, httpx.TooManyRedirects):  # pragma: no cover - redirects are off
@@ -339,7 +339,7 @@ async def scan_url(raw_url: str) -> dict:
         # As in tls_scanner: building the message must not itself raise, or the
         # handler meant to stop exceptions escaping becomes the one that leaks.
         try:
-            detail = _describe_failure(exc, target.hostname)
+            detail = _describe_failure(exc, target.hostname, target.port)
         except Exception:  # pragma: no cover - the belt for the braces
             detail = f"The header scan of {target.hostname} failed."
         raise HeaderScanError(detail) from exc
@@ -384,7 +384,10 @@ async def _fetch(target) -> httpx.Response:
     is what keeps this request on the address that was judged while leaving
     certificate verification pointed at the name the user asked for.
     """
-    url = httpx.URL(target.url).copy_with(host=target.address, port=HTTPS_PORT)
+    # target.port, not a constant: the guard approved this target on that
+    # port -- 443 unless the URL named one of the other allowed ports -- and
+    # the request has to go where the approval says.
+    url = httpx.URL(target.url).copy_with(host=target.address, port=target.port)
     async with httpx.AsyncClient(
         timeout=REQUEST_TIMEOUT_SECONDS,
         verify=_shared_ssl_context(),

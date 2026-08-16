@@ -39,8 +39,12 @@ Two layers guard the target, and they are not equal:
     message, and it is bypassable by anyone who can publish DNS, which is why
     it is never the thing standing between a caller and the metadata service.
 
-Scope is deliberately small, and shared by every caller: https only, port 443
-only. Redirect handling is the caller's business, but the answer is the same
+Scope is deliberately small, and shared by every caller: https only, and only
+the handful of ports in ALLOWED_PORTS -- 443 for a URL that names none, plus
+four conventional HTTPS alternatives. An arbitrary caller-chosen port is what
+would turn this into a port scanner, so the set is fixed here and imported by
+everything that connects. Redirect handling is the caller's business, but the
+answer is the same
 everywhere -- a redirect points at a host this module never judged, so
 following one would mean the guard checked one target and the socket visited
 another.
@@ -52,10 +56,34 @@ import re
 import socket
 from urllib.parse import urlsplit
 
-# The only port any caller may talk to. Hardcoded rather than taken from the
-# URL: a caller-chosen port turns a scanner into a port scanner that runs from
-# the backend's address and reports the results.
+# The port a URL that names none is scanned on, and the only one that was ever
+# accepted before the allowlist below existed.
 HTTPS_PORT = 443
+
+# Every port any caller may talk to, defined once for all three scanners.
+#
+# An allowlist rather than "whatever the URL says", and the distinction is the
+# whole control: a caller-chosen port turns a scanner into a port scanner that
+# runs from the backend's address and reports the results back -- which is a
+# reconnaissance technique in its own right, and would give away most of what
+# the address checks below are here to protect.
+#
+# Five entries, and four of them are here because a site that terminates TLS
+# somewhere other than 443 is a real thing rather than a hypothetical: 8443 is
+# the conventional alternative, and 4443, 9443 and 10443 are the ones that turn
+# up in front of admin interfaces and staging environments. What they have in
+# common is that they are HTTPS ports by convention -- none of them is a
+# database, an SSH daemon or a service-mesh sidecar, so the set says nothing
+# useful to somebody mapping a host.
+#
+# This is the one definition. tls_scanner, header_scanner and js_web_scanner
+# all reach the same answer by importing it, because three lists that happen to
+# agree today are three lists that stop agreeing the first time one is edited.
+ALLOWED_PORTS: frozenset[int] = frozenset({HTTPS_PORT, 4443, 8443, 9443, 10443})
+
+# Sorted for the error message, so the sentence a caller reads lists the ports
+# in a fixed order rather than whatever order the set iterates in today.
+_ALLOWED_PORTS_TEXT = ", ".join(str(port) for port in sorted(ALLOWED_PORTS))
 
 
 class SSRFGuardError(Exception):
@@ -116,18 +144,23 @@ _HOSTNAME_RE = re.compile(
 
 
 class Target:
-    """A validated https://host:443 a caller is cleared to connect to.
+    """A validated https://host:port a caller is cleared to connect to.
 
     `addresses` is empty until the name has been resolved and judged, and is
     the reason this is an object rather than a string: it carries the addresses
     the guard actually approved, so the caller connects to one of those instead
     of resolving the name again.
+
+    `port` is one of ALLOWED_PORTS, defaulting to 443 for a URL that names no
+    port. It is carried here rather than assumed by each scanner so that the
+    port the guard approved is the port the socket goes to -- the same argument
+    `addresses` exists for.
     """
 
-    def __init__(self, hostname: str, url: str) -> None:
+    def __init__(self, hostname: str, url: str, port: int = HTTPS_PORT) -> None:
         self.hostname = hostname
         self.url = url
-        self.port = HTTPS_PORT
+        self.port = port
         self.addresses: list[str] = []
 
     @property
@@ -191,10 +224,11 @@ def parse_target(raw_url: str) -> Target:
         port = parts.port
     except ValueError as exc:
         raise InvalidTargetURLError(f"That URL has an invalid port: {exc}") from exc
-    if port is not None and port != HTTPS_PORT:
+    if port is not None and port not in ALLOWED_PORTS:
         raise InvalidTargetURLError(
-            f"Only port {HTTPS_PORT} is scanned, and this URL asks for port "
-            f"{port}. Drop the port from the URL to scan {HTTPS_PORT}."
+            f"Only ports {_ALLOWED_PORTS_TEXT} are scanned, and this URL asks "
+            f"for port {port}. Drop the port from the URL to scan "
+            f"{HTTPS_PORT}."
         )
 
     hostname = (parts.hostname or "").strip().rstrip(".").lower()
@@ -208,7 +242,9 @@ def parse_target(raw_url: str) -> Target:
         raise InvalidTargetURLError(f"'{hostname}' is not a valid hostname.")
 
     _reject_internal_hostname(hostname)
-    return Target(hostname, text)
+    # `port or HTTPS_PORT` rather than `port`: a URL naming no port parses as
+    # None, and 443 is what "no port" has always meant here.
+    return Target(hostname, text, port or HTTPS_PORT)
 
 
 def _to_ascii(hostname: str) -> str:

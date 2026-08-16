@@ -91,6 +91,25 @@ def get_explanations() -> AsyncIOMotorCollection:
     return get_db().explanations
 
 
+def get_web_explanations() -> AsyncIOMotorCollection:
+    """Cached AI explanations of website-scan findings.
+
+    Its own collection rather than a discriminator field in `explanations`,
+    following the precedent get_patches sets immediately below: two features
+    keyed the same way but holding different content get two collections, so
+    one feature's TTL sweep can never evict the other's entries.
+
+    The content is the reason it applies here too. A code-finding explanation
+    is written about a flagged source line and the fix for it; a website
+    finding has no code at all, and is explained for a reader who may not know
+    what a cipher suite is. Sharing a collection would put two kinds of prose
+    behind one key space, and a hash collision in the key builder -- or a
+    future key builder that stopped including a distinguishing field -- would
+    serve one as the other.
+    """
+    return get_db().web_explanations
+
+
 def get_patches() -> AsyncIOMotorCollection:
     """Cached migration diffs. Separate from explanations rather than sharing
     the collection: the two are keyed the same way but hold different content,
@@ -132,6 +151,10 @@ async def create_indexes() -> None:
         # AI patch cache: same two indexes, same reasoning, its own collection.
         (db.patches, [("key", ASCENDING)], {"unique": True}),
         (db.patches, [("expires_at", ASCENDING)], {"expireAfterSeconds": 0}),
+        # Website-finding explanation cache: the same two again, for the same
+        # reason, in the collection get_web_explanations explains.
+        (db.web_explanations, [("key", ASCENDING)], {"unique": True}),
+        (db.web_explanations, [("expires_at", ASCENDING)], {"expireAfterSeconds": 0}),
     ]
     for collection, keys, options in specs:
         try:

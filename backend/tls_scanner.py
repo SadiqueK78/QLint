@@ -18,9 +18,9 @@ server the attacker controls can return a public address to the check and
 127.0.0.1 to the connection a moment later. The hostname travels only as the
 SNI/verification name. There is exactly one resolution.
 
-Scope is deliberately small: https only, port 443 only, no redirects, no
-following anything the target says. The endpoint reports on the exact host it
-was given or it fails.
+Scope is deliberately small: https only, one of ssrf_guard.ALLOWED_PORTS only
+(443 unless the URL names another), no redirects, no following anything the
+target says. The endpoint reports on the exact host it was given or it fails.
 """
 
 import asyncio
@@ -44,8 +44,10 @@ from ssrf_guard import (
 from vulnerability_db import find_algorithm, get_severity_score
 
 # Re-exported under this module's own name because the port is part of the TLS
-# story here (443 is where TLS lives), and because `raw.connect((ip_address,
-# TLS_PORT))` reads better in _handshake than a generic constant would.
+# story here: 443 is where TLS lives, and it is where a target that names no
+# port is scanned. A URL that does name one is scanned on that port instead,
+# provided ssrf_guard.ALLOWED_PORTS holds it -- the guard makes that decision,
+# and what arrives here is a Target carrying the port it approved.
 TLS_PORT = HTTPS_PORT
 
 # Names kept importable from this module so nothing that already depends on
@@ -94,8 +96,14 @@ _PROTOCOL_NAMES = {
 }
 
 
-def _handshake(ip_address: str, hostname: str, verify: bool = True) -> dict:
+def _handshake(
+    ip_address: str, hostname: str, verify: bool = True, port: int = TLS_PORT
+) -> dict:
     """Connect to one already-validated address and complete a TLS handshake.
+
+    `port` is the one the guard approved for this target, defaulting to 443 for
+    a target that named none. It is passed in rather than read from a constant
+    so that the socket goes to the port that was actually validated.
 
     Takes an address, not a name. That is the point: the name was resolved and
     judged once by the caller, and re-resolving it here -- which is what
@@ -127,7 +135,7 @@ def _handshake(ip_address: str, hostname: str, verify: bool = True) -> dict:
     raw = socket.socket(family, socket.SOCK_STREAM)
     raw.settimeout(HANDSHAKE_TIMEOUT_SECONDS)
     try:
-        raw.connect((ip_address, TLS_PORT))
+        raw.connect((ip_address, port))
         with context.wrap_socket(raw, server_hostname=hostname) as tls:
             tls.settimeout(HANDSHAKE_TIMEOUT_SECONDS)
             cipher = tls.cipher() or (None, None, None)
@@ -184,7 +192,7 @@ def _verification_reason(exc: ssl.SSLCertVerificationError) -> str:
     )
 
 
-def _safe_describe(exc: Exception, hostname: str) -> str:
+def _safe_describe(exc: Exception, hostname: str, port: int = TLS_PORT) -> str:
     """_describe_failure, guaranteed not to raise.
 
     Describing a failure means reading attributes off an exception object, and
@@ -194,12 +202,12 @@ def _safe_describe(exc: Exception, hostname: str) -> str:
     is exactly the bug this wrapper was written for.
     """
     try:
-        return _describe_failure(exc, hostname)
+        return _describe_failure(exc, hostname, port)
     except Exception:  # pragma: no cover - the belt for the braces
         return f"The TLS scan of {hostname} failed."
 
 
-def _describe_failure(exc: Exception, hostname: str) -> str:
+def _describe_failure(exc: Exception, hostname: str, port: int = TLS_PORT) -> str:
     """One sentence saying what went wrong, with nothing internal in it.
 
     Every branch names the host and the failure mode. The exception text is
@@ -231,12 +239,12 @@ def _describe_failure(exc: Exception, hostname: str) -> str:
             "abandoned."
         )
     if isinstance(exc, ConnectionRefusedError):
-        return f"{hostname} refused the connection on port {TLS_PORT}."
+        return f"{hostname} refused the connection on port {port}."
     if isinstance(exc, ConnectionResetError):
         return f"{hostname} reset the connection before the handshake finished."
     if isinstance(exc, OSError):
         return (
-            f"Could not reach {hostname} on port {TLS_PORT}: "
+            f"Could not reach {hostname} on port {port}: "
             f"{exc.strerror or exc}."
         )
     return f"The TLS scan of {hostname} failed: {exc}"
@@ -1012,7 +1020,9 @@ async def _resolve_and_inspect(raw_url: str) -> dict:
 
     verification_error: str | None = None
     try:
-        handshake = await asyncio.to_thread(_handshake, address, target.hostname)
+        handshake = await asyncio.to_thread(
+            _handshake, address, target.hostname, True, target.port
+        )
     except ssl.SSLCertVerificationError as exc:
         # The certificate is untrusted, not absent. A host that presents an
         # expired or self-signed certificate is still a host with a protocol, a
@@ -1027,14 +1037,14 @@ async def _resolve_and_inspect(raw_url: str) -> dict:
         verification_error = _verification_reason(exc)
         try:
             handshake = await asyncio.to_thread(
-                _handshake, address, target.hostname, False
+                _handshake, address, target.hostname, False, target.port
             )
         except Exception as retry_exc:
             # The retry failed too, so there is no certificate to report on
             # after all. Report the original trust failure, which describes the
             # target better than "the second connection also failed" does.
             raise TLSConnectionError(
-                _safe_describe(exc, target.hostname)
+                _safe_describe(exc, target.hostname, target.port)
             ) from retry_exc
     except TLSScanError:
         raise
@@ -1047,7 +1057,9 @@ async def _resolve_and_inspect(raw_url: str) -> dict:
         # certificate reporting: an unreachable host, a refused connection or a
         # handshake that never completed presented no certificate, so there is
         # nothing to build a report from and the caller gets an error.
-        raise TLSConnectionError(_safe_describe(exc, target.hostname)) from exc
+        raise TLSConnectionError(
+            _safe_describe(exc, target.hostname, target.port)
+        ) from exc
 
     certificate = parse_certificate(handshake["certificate_der"])
     findings = classify(handshake, certificate, verification_error, target.hostname)

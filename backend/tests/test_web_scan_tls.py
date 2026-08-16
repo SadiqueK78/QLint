@@ -152,6 +152,8 @@ class FakeNetwork:
         self.verify_error = verify_error
         self.resolutions: list[str] = []
         self.connections: list[tuple[str, str]] = []
+        # The port each handshake was actually asked to connect to.
+        self.ports: list[int] = []
         self.verify_flags: list[bool] = []
 
     def install(self, monkeypatch):
@@ -178,8 +180,9 @@ class FakeNetwork:
                     )
             return answers
 
-        def _handshake(ip_address, hostname, verify=True):
+        def _handshake(ip_address, hostname, verify=True, port=443):
             self.connections.append((ip_address, hostname))
+            self.ports.append(port)
             self.verify_flags.append(verify)
             if self.handshake_error is not None:
                 raise self.handshake_error
@@ -637,8 +640,11 @@ class TestTheUrlMustBeHttps:
         assert scan(client, url).status_code == 400
         assert network.connections == []
 
-    def test_a_non_443_port_is_rejected_in_this_phase(self, client, network):
-        response = scan(client, "https://example.com:8443")
+    def test_a_port_outside_the_allowlist_is_rejected(self, client, network):
+        """8443 used to fail here and now succeeds: it is one of the five ports
+        ssrf_guard.ALLOWED_PORTS holds. A port outside that set still fails,
+        and the refusal still lands before any socket is opened."""
+        response = scan(client, "https://example.com:8080")
         assert response.status_code == 400
         assert "443" in response.json()["detail"]
         assert network.connections == []
@@ -865,7 +871,7 @@ class TestTheGuardUnitLevel:
         code = ast.unparse(function)
 
         # The socket goes to the validated address...
-        assert "raw.connect((ip_address, TLS_PORT))" in code
+        assert "raw.connect((ip_address, port))" in code
         assert "create_connection" not in code
         # ...and the hostname is carried only as the SNI/verification name, so
         # the certificate is still checked against the name the user asked for.

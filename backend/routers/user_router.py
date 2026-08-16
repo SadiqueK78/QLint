@@ -10,7 +10,13 @@ from pymongo import DESCENDING
 from pymongo.errors import PyMongoError
 
 from auth import get_current_user, to_object_id
-from database import SCAN_TYPE_REPOSITORY, SCAN_TYPE_WEBSITE, VISIBLE_SCAN, get_scans
+from database import (
+    REPOSITORY_SCAN,
+    SCAN_TYPE_REPOSITORY,
+    SCAN_TYPE_WEBSITE,
+    VISIBLE_SCAN,
+    get_scans,
+)
 from cbom_converter import convert_to_cbom, convert_website_to_cbom
 from github_client import InvalidRepoURLError, manifest_fetcher, parse_repo_url
 from sarif_converter import convert_to_sarif
@@ -87,17 +93,49 @@ def _summarize(entry: dict) -> dict:
     }
 
 
+def _scan_type_filter(scan_type: str | None) -> dict:
+    """The query fragment narrowing the history to one kind of scan.
+
+    Empty when no kind was asked for, which is what keeps this addition from
+    changing the answer for every caller that existed before it: an omitted
+    parameter has to mean the unfiltered list of both kinds, exactly as before.
+
+    "website" matches on the field directly. "repository" is spelled as "not a
+    website" for the same reason database.REPOSITORY_SCAN is -- every document
+    written before scan_type existed has no such field, and in MongoDB an
+    equality match on "repository" does not match a missing one. Filtering to
+    repositories must not quietly hide a user's whole pre-website history.
+    """
+    if scan_type == SCAN_TYPE_WEBSITE:
+        return {"scan_type": SCAN_TYPE_WEBSITE}
+    if scan_type == SCAN_TYPE_REPOSITORY:
+        return REPOSITORY_SCAN
+    return {}
+
+
 @router.get("/scans")
 async def list_scans(
     user: dict = Depends(get_current_user),
     page: int = Query(default=1, ge=1),
     limit: int = Query(default=10, ge=1, le=50),
+    # Optional, and invalid values are refused rather than silently ignored: a
+    # typo that quietly returned everything would read as "the filter is
+    # broken" to a user watching rows that should not be there.
+    scan_type: str | None = Query(
+        default=None, pattern=f"^({SCAN_TYPE_REPOSITORY}|{SCAN_TYPE_WEBSITE})$"
+    ),
 ):
     scans = get_scans()
     # VISIBLE_SCAN drops the scans this user has hidden. `total` is therefore
     # the size of the list being paginated, not the account's lifetime scan
-    # count -- the two diverge as soon as anything is deleted.
-    query = {"user_id": str(user["_id"]), **VISIBLE_SCAN}
+    # count -- the two diverge as soon as anything is deleted. The scan_type
+    # fragment narrows it further when one was asked for, and `total` counts
+    # the filtered list so the page count matches what is actually paginated.
+    query = {
+        "user_id": str(user["_id"]),
+        **VISIBLE_SCAN,
+        **_scan_type_filter(scan_type),
+    }
     try:
         total = await scans.count_documents(query)
         cursor = (

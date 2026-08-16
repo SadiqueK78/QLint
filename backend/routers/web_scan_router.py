@@ -6,6 +6,8 @@
                               the transport is up.
   * POST /web-scan/javascript what code the page runs, through js_scanner.
   * POST /web-scan            all three at once, as one report.
+  * POST /web-scan/explain     one finding from any of them, explained in
+                              plain English by a model.
 
 Level 2 -- everything else in QLint -- reads source code and only ever talks to
 GitHub. This router is the only one that connects to a host a user names, which
@@ -33,15 +35,23 @@ a code scan produces.
 """
 
 import asyncio
+import hashlib
+import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from pymongo.errors import PyMongoError
 
+from ai_explainer import AIExplainerError
 from auth import get_current_user
-from database import SCAN_TYPE_WEBSITE, get_scans, get_users
+from database import (
+    SCAN_TYPE_WEBSITE,
+    get_scans,
+    get_users,
+    get_web_explanations,
+)
 from header_scanner import HeaderScanError
 from header_scanner import scan_url as header_scan_url
 from js_web_scanner import JSWebScanError
@@ -55,6 +65,7 @@ from ssrf_guard import (
 )
 from tls_scanner import TLSConnectionError, TLSScanError, scan_url
 from vulnerability_db import find_algorithm, get_severity_score
+from web_explainer import explain_web_finding
 
 logger = logging.getLogger(__name__)
 
@@ -166,10 +177,12 @@ class WebScanRequest(BaseModel):
 
 @router.post("/web-scan/tls", dependencies=[Depends(rate_limit_by_user(_limiter))])
 async def scan_website_tls(body: WebScanRequest, user: dict = Depends(get_current_user)):
-    """Inspect the TLS configuration a site actually serves, on port 443.
+    """Inspect the TLS configuration a site actually serves.
 
-    No redirects are followed and no port other than 443 is contacted: the
-    report describes the exact host that was asked for, or the request fails.
+    Port 443 unless the URL names one of the other ports in
+    ssrf_guard.ALLOWED_PORTS, and no redirects are followed: the report
+    describes the exact host and port that were asked for, or the request
+    fails.
     Following a redirect would mean reporting on a host the caller never named
     and the address guard never judged -- the guard would be checking one
     target and the socket would be visiting another.
@@ -186,7 +199,7 @@ async def scan_website_tls(body: WebScanRequest, user: dict = Depends(get_curren
 async def scan_website_headers(
     body: WebScanRequest, user: dict = Depends(get_current_user)
 ):
-    """Report which HTTP security headers a site sends, on port 443.
+    """Report which HTTP security headers a site sends.
 
     Same request shape, same https-only rule and the same ssrf_guard as the TLS
     endpoint above -- the target validation is shared code, not a second
@@ -329,14 +342,44 @@ def _tls_category(finding: dict) -> str:
     return CATEGORY_TLS
 
 
+def _canonical_algorithm(finding: dict) -> str | None:
+    """CRYPTO_DB's name for whatever algorithm this finding names, or None.
+
+    The three domains do not spell the same primitive the same way: a TLS key
+    exchange is "ECDH", a JavaScript finding for the same thing is "ECC", and a
+    certificate signature is "SHA256withRSA" where a code finding is "SHA-256".
+    Resolving through CRYPTO_DB is what collapses those onto one name.
+
+    Stamped on each finding as well as summarised at the top of the report,
+    because the two have to agree: algorithms_found is the list the UI draws
+    the "Algorithms Detected" badges from, and clicking one filters the
+    findings. If a badge said "ECC" and the finding it came from only ever said
+    "ECDH", the filter would match nothing and the badge would look broken.
+    """
+    algorithm = finding.get("algorithm")
+    if not algorithm:
+        return None
+    entry = find_algorithm(algorithm)
+    return (entry or {}).get("canonical_name") or algorithm
+
+
 def _tagged(finding: dict, category: str) -> dict:
     """One finding, copied, with its domain stamped on it.
 
     Copied rather than mutated: the sub-reports are the scanners' own objects,
     and a merge step that edits them in place is how the stored report and the
     returned report would quietly stop being the same thing.
+
+    canonical_algorithm is added alongside category and never replaces the
+    scanner's own `algorithm`: the raw name is what the scanner observed and is
+    what the finding card shows, the canonical one is what groups it with
+    findings from the other two domains.
     """
-    return {**finding, "category": category}
+    return {
+        **finding,
+        "category": category,
+        "canonical_algorithm": _canonical_algorithm(finding),
+    }
 
 
 def _merge_findings(tls: dict | None, headers: dict | None, javascript: dict | None):
@@ -407,11 +450,13 @@ def _algorithms_found(findings: list[dict]) -> list[str]:
     """
     names = set()
     for finding in findings:
-        algorithm = finding.get("algorithm")
-        if not algorithm or _score_severity(finding) in ("safe", "info"):
+        # Read off the finding rather than resolved again here: _tagged already
+        # stamped it, and two call sites resolving the same name separately is
+        # how the badge list and the findings behind it would drift apart.
+        canonical = finding.get("canonical_algorithm")
+        if not canonical or _score_severity(finding) in ("safe", "info"):
             continue
-        entry = find_algorithm(algorithm)
-        names.add((entry or {}).get("canonical_name") or algorithm)
+        names.add(canonical)
     return sorted(names)
 
 
@@ -623,3 +668,146 @@ async def scan_website(body: WebScanRequest, user: dict = Depends(get_current_us
         # the CBOM export is addressed by id. Same rule as /scan.
         result = {**result, "scan_id": scan_id}
     return result
+
+
+# ---------------------------------------------------------------------------
+# Plain-English explanations of one website finding
+# ---------------------------------------------------------------------------
+
+# A separate endpoint from /scan/explain rather than a finding-type branch
+# inside it, and the reason is the shape of what is being explained. That
+# endpoint's request model requires an algorithm and is built around
+# code_snippet and fix_snippet -- the flagged source line and its replacement.
+# A missing HTTP header has no algorithm, no file, no line and no code, so
+# reaching that endpoint would mean sending fabricated fields for every one of
+# them, and its prompt instructs the model to name the functions in code it
+# would never have received.
+#
+# The cache is separated for the same reason: see database.get_web_explanations
+# on why this is its own collection rather than a discriminator column in the
+# one code-finding explanations live in.
+EXPLANATION_CACHE_TTL_DAYS = 30
+
+# Its own bucket, independent of /scan/explain's. Sharing one would mean
+# explaining the headers on a site spent the allowance for explaining findings
+# in code, which are different features a user reaches from different screens.
+#
+# The window matches /scan/explain's ten minutes so the two behave the same way
+# from a user's point of view. The count is 20 rather than 30 because a website
+# report is smaller than a repository report -- four categories of a few
+# findings each, against a file tree -- so twenty is already enough to explain
+# an entire report by hand without leaving room for a script to run up a bill.
+#
+# Counted per account, not per address, unlike /scan/explain: that route has no
+# session to name, this one requires one like everything else in this router,
+# and Render's proxy collapses every visitor onto a single address (see
+# rate_limit.client_key).
+_explain_limiter = RateLimiter(max_requests=20, window_seconds=600)
+
+
+class WebFindingExplainRequest(BaseModel):
+    """One merged website finding, in the shape /web-scan already returns.
+
+    Only two fields are required, and which two is deliberate. `category` and
+    `severity` are stamped on every merged finding by this router regardless of
+    which scanner produced it. Everything else varies by domain -- a header
+    finding has no algorithm, a JavaScript finding has no status -- so
+    requiring any of them would refuse findings that are perfectly well formed.
+    web_explainer refuses the one combination that says nothing at all: neither
+    an asset nor an algorithm.
+    """
+
+    category: str
+    severity: str
+    asset: str | None = None
+    type: str | None = None
+    status: str | None = None
+    algorithm: str | None = None
+    key_size: str | None = None
+    observed_value: str | None = None
+    quantum_risk: str | None = None
+    recommendation: str | None = None
+
+
+def _explain_cache_key(finding: WebFindingExplainRequest) -> str:
+    """Hash every field the prompt is built from, and nothing else.
+
+    Keyed on content, exactly as /scan/explain is: two sites missing the same
+    header deserve the same explanation and should cost one completion between
+    them. Nothing identifying the site is in the key -- no URL, no hostname --
+    because the explanation never mentions one, and including it would turn a
+    shared answer into one cache entry per site for identical prose.
+    """
+    payload = finding.model_dump()
+    raw = json.dumps(payload, sort_keys=True)
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+async def _explain_cache_lookup(key: str) -> dict | None:
+    try:
+        return await get_web_explanations().find_one(
+            {"key": key, "expires_at": {"$gt": datetime.now(timezone.utc)}}
+        )
+    except PyMongoError:
+        return None  # cache is an optimization, never a hard dependency
+
+
+async def _explain_cache_store(key: str, explanation: str, model: str) -> None:
+    now = datetime.now(timezone.utc)
+    try:
+        await get_web_explanations().update_one(
+            {"key": key},
+            {
+                "$set": {
+                    "key": key,
+                    "explanation": explanation,
+                    "model": model,
+                    "created_at": now,
+                    "expires_at": now + timedelta(days=EXPLANATION_CACHE_TTL_DAYS),
+                }
+            },
+            upsert=True,
+        )
+    except PyMongoError:
+        pass  # a failed cache write must not fail the request
+
+
+@router.post(
+    "/web-scan/explain",
+    dependencies=[Depends(rate_limit_by_user(_explain_limiter))],
+)
+async def explain_website_finding(
+    body: WebFindingExplainRequest,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """Explain one website finding in plain English.
+
+    Authenticated like every other route in this router, and for the same
+    reason /scan/explain is rate limited at all: each cache miss buys a
+    completion, so the caller has to be an account rather than an address.
+
+    A cached explanation is returned without touching OpenRouter. A document
+    missing its explanation counts as a miss rather than being served as an
+    empty answer, so a partial write cannot poison the cache for 30 days --
+    the same rule /scan/explain applies to its own collection.
+    """
+    key = _explain_cache_key(body)
+
+    cached = await _explain_cache_lookup(key)
+    if cached and cached.get("explanation"):
+        return {
+            "explanation": cached["explanation"],
+            "model": cached.get("model"),
+            "cached": True,
+        }
+
+    try:
+        explanation, model = await explain_web_finding(
+            body.model_dump(), request.app.state.openrouter
+        )
+    except AIExplainerError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    await _explain_cache_store(key, explanation, model)
+    return {"explanation": explanation, "model": model, "cached": False}

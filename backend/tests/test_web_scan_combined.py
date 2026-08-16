@@ -223,6 +223,8 @@ class FakeSite:
 
         self.resolutions: list[str] = []
         self.connections: list[tuple[str, str]] = []
+        # The port each handshake was actually asked to connect to.
+        self.ports: list[int] = []
         self.header_requests: list[str] = []
         self.streamed: list[str] = []
 
@@ -236,8 +238,9 @@ class FakeSite:
                 )
             return answers
 
-        def _handshake(ip_address, hostname, verify=True):
+        def _handshake(ip_address, hostname, verify=True, port=443):
             self.connections.append((ip_address, hostname))
+            self.ports.append(port)
             if self.handshake_error is not None:
                 raise self.handshake_error
             return {
@@ -638,6 +641,63 @@ class TestTheNonFindingDetail:
         found = scan(client).json()["algorithms_found"]
         assert "AES-256" not in found  # a 256-bit cipher is not an exposure
         assert "TLS 1.3" not in found
+
+    def test_every_finding_carries_the_canonical_name_of_its_algorithm(
+        self, client, site
+    ):
+        """The per-finding half of the same resolution.
+
+        algorithms_found is what the results view draws the "Algorithms
+        Detected" badges from, and clicking a badge filters the findings behind
+        it. That only works if a finding can be matched against a badge, which
+        the raw `algorithm` cannot do: the key exchange says "ECDH" where the
+        badge says "ECC". canonical_algorithm is the field the two meet on.
+        """
+        findings = {
+            finding["asset"]: finding
+            for finding in scan(client).json()["findings"]
+            if finding.get("asset")
+        }
+        key_exchange = findings["ECDHE"]
+        assert key_exchange["algorithm"] == "ECDH"      # what the scanner saw
+        assert key_exchange["canonical_algorithm"] == "ECC"  # what the badge says
+
+    def test_the_raw_algorithm_is_left_untouched_beside_it(self, client, site):
+        """Additive, not a rewrite: the card shows what the site actually
+        negotiated, so the scanner's own spelling has to survive."""
+        for finding in scan(client).json()["findings"]:
+            if finding.get("algorithm"):
+                assert finding["algorithm"] is not None
+                assert "canonical_algorithm" in finding
+
+    def test_a_finding_with_no_algorithm_carries_a_null_canonical_name(
+        self, client, site
+    ):
+        """A missing security header names no algorithm at all. The key is
+        still present and null rather than absent, so a reader never has to
+        tell "no algorithm" apart from "an older backend"."""
+        headers = [
+            finding
+            for finding in scan(client).json()["findings"]
+            if finding["category"] == CATEGORY_HTTP_HEADER
+        ]
+        assert headers
+        assert all(
+            finding["canonical_algorithm"] is None
+            for finding in headers
+            if not finding.get("algorithm")
+        )
+
+    def test_every_badge_matches_at_least_one_finding(self, client, site):
+        """The property the badges are useless without: every name in
+        algorithms_found is a name some finding can be filtered down to. A
+        badge that matched nothing would look like a broken filter."""
+        body = scan(client).json()
+        canonical = {
+            finding.get("canonical_algorithm") for finding in body["findings"]
+        }
+        for algorithm in body["algorithms_found"]:
+            assert algorithm in canonical
 
 
 # ---------------------------------------------------------------------------
@@ -1128,6 +1188,7 @@ class TestTheRouterIsRegistered:
             "/web-scan/tls",
             "/web-scan/headers",
             "/web-scan/javascript",
+            "/web-scan/explain",
         }
 
     def test_the_endpoint_only_answers_post(self):

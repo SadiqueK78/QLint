@@ -76,6 +76,17 @@ const GITHUB_LOGIN_URL = `${API_BASE}/auth/github/login`;
 const SCAN_MODE_REPOSITORY = "repository";
 const SCAN_MODE_WEBSITE = "website";
 
+// The scan history's kind filter. "all" is this component's own word for "no
+// filter" and is never sent to the backend -- the parameter's absence is what
+// means both kinds there. The other two are the scan_type values themselves,
+// so the tab a user picks and the query it produces are the same word.
+const HISTORY_FILTER_ALL = "all";
+const HISTORY_FILTERS = [
+  { key: HISTORY_FILTER_ALL, label: "All" },
+  { key: SCAN_MODE_REPOSITORY, label: "Repository" },
+  { key: SCAN_MODE_WEBSITE, label: "Website" },
+];
+
 const SCAN_MODES = [
   {
     value: SCAN_MODE_REPOSITORY,
@@ -1124,6 +1135,49 @@ async function downloadExport(result, authToken, format) {
     throw new Error(detail || `HTTP ${response.status}`);
   }
   saveBlob(await response.blob(), reportFilename(result, extension));
+}
+
+// The website report's filename. reportFilename cannot serve it: that one is
+// built from result.repo, which a website scan does not have and must not be
+// given -- a repository and a site are not the same thing wearing different
+// labels.
+function websiteReportFilename(result, extension) {
+  const date = new Date().toISOString().slice(0, 10);
+  const host =
+    result.host ||
+    (result.url || "site").replace(/^https?:\/\//, "").split("/")[0];
+  // Anything a filesystem would object to becomes a hyphen. A hostname rarely
+  // contains such a character; a URL used as the fallback readily does.
+  return `qlint-website-${host.replace(/[^\w.-]+/g, "-")}-${date}.${extension}`;
+}
+
+// CBOM, and only CBOM. SARIF describes results at file locations in source
+// code and an SBOM inventories the dependencies a repository's manifests
+// declare; a live site has neither, and the backend answers 422 for both
+// rather than emitting a document full of locations that do not exist.
+//
+// No unsaved-scan fallback either, unlike downloadExport: /scan can re-render
+// a repository report in another format on demand, but there is no equivalent
+// for a website -- the only way to produce this document is from the stored
+// scan, so a scan whose record could not be written says so instead of
+// silently rescanning the site.
+async function downloadWebsiteCbom(result, authToken) {
+  if (!result.scan_id || !authToken) {
+    throw new Error(
+      "This scan was not saved, so there is no stored report to export. " +
+        "Sign in and scan the site again to download its CBOM."
+    );
+  }
+  const response = await fetch(
+    `${API_BASE}/user/scans/${result.scan_id}/cbom`,
+    { headers: { Authorization: `Bearer ${authToken}` } }
+  );
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    const detail = typeof body?.detail === "string" ? body.detail : null;
+    throw new Error(detail || `HTTP ${response.status}`);
+  }
+  saveBlob(await response.blob(), websiteReportFilename(result, "cbom.json"));
 }
 
 // Only the fields the backend actually reads get sent. That includes the
@@ -2475,7 +2529,16 @@ function SignInModal({ onClose }) {
 // counts every scan the account has ever run and is not decremented by a
 // delete -- so emptying the history left the header claiming "4 scans" above
 // the empty-state message.
-function HistoryPanel({ scans, loading, error, onGoHome, onOpen, onDelete }) {
+function HistoryPanel({
+  scans,
+  loading,
+  error,
+  onGoHome,
+  onOpen,
+  onDelete,
+  filter,
+  onFilterChange,
+}) {
   return (
     <div className="history-overlay">
       <div className="history-inner">
@@ -2497,11 +2560,33 @@ function HistoryPanel({ scans, loading, error, onGoHome, onOpen, onDelete }) {
           </button>
         </div>
 
+        {/* The severity tabs' visual treatment, reused rather than restyled:
+            it is the app's existing way of saying "these narrow the list
+            below". Each one re-fetches from the first page, so the count in
+            the header stays the count of what the filter actually matched. */}
+        <div className="tabs">
+          {HISTORY_FILTERS.map((option) => (
+            <button
+              key={option.key}
+              type="button"
+              className={`tab${filter === option.key ? " tab-active" : ""}`}
+              onClick={() => onFilterChange(option.key)}
+              aria-pressed={filter === option.key}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+
         {loading && <div className="history-message">Loading scans...</div>}
         {!loading && error && <div className="history-message">{error}</div>}
         {!loading && !error && scans.length === 0 && (
           <div className="history-message">
-            No scans yet. Scan a repository to get started.
+            {filter === HISTORY_FILTER_ALL
+              ? "No scans yet. Scan a repository to get started."
+              : `No ${
+                  filter === SCAN_MODE_WEBSITE ? "website" : "repository"
+                } scans yet.`}
           </div>
         )}
 
@@ -2898,6 +2983,7 @@ export default function App() {
   const [showSignIn, setShowSignIn] = useState(false);
   const [userScans, setUserScans] = useState([]);
   const [showHistory, setShowHistory] = useState(false);
+  const [historyFilter, setHistoryFilter] = useState(HISTORY_FILTER_ALL);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState(null);
 
@@ -3108,11 +3194,21 @@ export default function App() {
     }
   };
 
-  const loadHistory = async (token) => {
+  // The filter is applied by the backend and the list is re-fetched from the
+  // first page, rather than filtered in the browser. Filtering the loaded page
+  // would hide matching scans sitting on pages that were never fetched -- a
+  // user with 50 repository scans and one website scan would be told they have
+  // no website scans at all.
+  const loadHistory = async (token, scanType = historyFilter) => {
     setHistoryLoading(true);
     setHistoryError(null);
     try {
-      const res = await fetch(`${API_BASE}/user/scans?page=1&limit=50`, {
+      const query = new URLSearchParams({ page: "1", limit: "50" });
+      // Omitted rather than sent empty for "All": the parameter's absence is
+      // what means "both kinds", and the backend refuses a value it does not
+      // recognise.
+      if (scanType !== HISTORY_FILTER_ALL) query.set("scan_type", scanType);
+      const res = await fetch(`${API_BASE}/user/scans?${query}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -3127,8 +3223,8 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (showHistory && authToken) loadHistory(authToken);
-  }, [showHistory, authToken]);
+    if (showHistory && authToken) loadHistory(authToken, historyFilter);
+  }, [showHistory, authToken, historyFilter]);
 
   const openHistoryScan = async (scan) => {
     if (!authToken) return;
@@ -3550,7 +3646,14 @@ export default function App() {
             view === "results" &&
             scanResult &&
             resultKind === SCAN_MODE_WEBSITE && (
-              <WebsiteResultsView result={scanResult} onReset={handleReset} />
+              <WebsiteResultsView
+                result={scanResult}
+                onReset={handleReset}
+                authToken={authToken}
+                onDownloadCbom={() =>
+                  downloadWebsiteCbom(scanResult, authToken)
+                }
+              />
             )}
           {!activePage &&
             view === "results" &&
@@ -3588,6 +3691,8 @@ export default function App() {
           }}
           onOpen={openHistoryScan}
           onDelete={deleteHistoryScan}
+          filter={historyFilter}
+          onFilterChange={setHistoryFilter}
         />
       )}
       {showAdmin && (

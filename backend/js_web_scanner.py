@@ -253,7 +253,10 @@ def _pinned_url(target) -> httpx.URL:
     judged. The name still travels, as Host and SNI, so certificate
     verification is unaffected.
     """
-    return httpx.URL(target.url).copy_with(host=target.address, port=HTTPS_PORT)
+    # target.port, not a constant: the guard judged this exact target on that
+    # port, and it judges every script URL independently -- so a script on an
+    # allowed non-standard port is fetched on the port it names.
+    return httpx.URL(target.url).copy_with(host=target.address, port=target.port)
 
 
 def _pin_headers(target) -> dict:
@@ -336,7 +339,7 @@ def _remaining(deadline: float) -> float:
     return deadline - time.monotonic()
 
 
-def _describe_failure(exc: Exception, hostname: str) -> str:
+def _describe_failure(exc: Exception, hostname: str, port: int = HTTPS_PORT) -> str:
     """One sentence, nothing internal in it. Mirrors header_scanner's."""
     if isinstance(exc, httpx.ConnectTimeout):
         return f"{hostname} did not accept a connection in time."
@@ -344,7 +347,7 @@ def _describe_failure(exc: Exception, hostname: str) -> str:
         return f"{hostname} did not answer in time."
     if isinstance(exc, httpx.ConnectError):
         return (
-            f"Could not connect to {hostname} on port {HTTPS_PORT}: the host "
+            f"Could not connect to {hostname} on port {port}: the host "
             "refused the connection or is unreachable."
         )
     if isinstance(exc, httpx.HTTPError):
@@ -384,7 +387,7 @@ async def scan_url(raw_url: str) -> dict:
         ) from exc
     except Exception as exc:
         try:
-            detail = _describe_failure(exc, page.hostname)
+            detail = _describe_failure(exc, page.hostname, page.port)
         except Exception:  # pragma: no cover - the belt for the braces
             detail = f"The scan of {page.hostname} failed."
         raise JSWebScanError(detail) from exc
@@ -472,7 +475,8 @@ async def _fetch_external_scripts(references: list[dict], deadline: float) -> bo
                 continue
             except Exception as exc:
                 reference["skip_reason"] = (
-                    f"{SKIP_FETCH_FAILED}: {_describe_failure(exc, target.hostname)}"
+                    f"{SKIP_FETCH_FAILED}: "
+                    f"{_describe_failure(exc, target.hostname, target.port)}"
                 )
                 continue
 
