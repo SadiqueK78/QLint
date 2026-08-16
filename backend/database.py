@@ -60,6 +60,16 @@ SCAN_TYPE_WEBSITE = "website"
 # VISIBLE_SCAN match on null rather than on $exists.
 REPOSITORY_SCAN: dict = {"scan_type": {"$ne": SCAN_TYPE_WEBSITE}}
 
+# The complement, for reads whose answer is only about websites -- grouping on
+# target_url, or reading the flat result.findings list a website report carries.
+#
+# Spelled as plain equality rather than as "not a repository", and this is the
+# one place the asymmetry with REPOSITORY_SCAN above is deliberate rather than
+# accidental. Every document predating scan_type is a repository scan, so the
+# untagged history has to fall on that side of the line: "not a website" claims
+# it, "is a website" correctly does not.
+WEBSITE_SCAN: dict = {"scan_type": SCAN_TYPE_WEBSITE}
+
 _client: AsyncIOMotorClient | None = None
 _db: AsyncIOMotorDatabase | None = None
 

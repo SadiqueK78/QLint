@@ -24,6 +24,34 @@ export default function Privacy() {
       </section>
 
       <section className="doc-section">
+        <h2 className="doc-heading">When you scan a website</h2>
+        <p className="doc-text">
+          A scan can be pointed at a website instead of a GitHub repository.
+          When it is, QLint connects to that live site over the network from
+          our server and looks at three things: the TLS configuration it
+          negotiates, the HTTP response headers it returns, and the JavaScript
+          files the page references, which are fetched and analysed the same
+          way repository source is. What is kept is the report — the findings,
+          the algorithms matched, and the URLs of the scripts that were read.
+        </p>
+        <p className="doc-text">
+          Only public destinations can be reached this way. QLint does not scan
+          private, internal, or otherwise non-public network addresses, and it
+          has safeguards that refuse such a target rather than leaving it to
+          the person typing the URL. The connection is made from our server, so
+          it is our address the scanned site sees, not yours.
+        </p>
+        <p className="doc-text">
+          Website scan reports are saved against your account exactly as
+          repository reports are: they appear in My Scans, they can be reopened,
+          and you can delete them from the same place. Unlike a repository scan,
+          a website scan is never served from the shared results cache described
+          below — a live site is the thing whose answer should not be a day old,
+          so every website scan is a fresh connection.
+        </p>
+      </section>
+
+      <section className="doc-section">
         <h2 className="doc-heading">If you are signed in</h2>
         <p className="doc-text">
           Signing in with GitHub stores your email address, your GitHub
@@ -65,16 +93,27 @@ export default function Privacy() {
         <h2 className="doc-heading">AI features and OpenRouter</h2>
         <p className="doc-text">
           Explain with AI and Generate Patch send one finding at a time to a
-          language model hosted by OpenRouter. What is sent is the finding: the
-          algorithm name, its severity and attack vector, the recommended
-          replacement, the file name and line number, the single flagged line of
-          source, and the reference fix from our own database. Your repository
-          is not uploaded, and no file is sent in full.
+          language model hosted by OpenRouter. This applies to both kinds of
+          finding: a code finding from a repository scan and a website finding
+          from a TLS, header, or JavaScript check are each sent the same way
+          when you ask for an explanation of one.
+        </p>
+        <p className="doc-text">
+          What is sent is that finding and nothing around it. For a code
+          finding: the algorithm name, its severity and attack vector, the
+          recommended replacement, the file name and line number, the single
+          flagged line of source, and the reference fix from our own database.
+          For a website finding: the URL that was scanned, what was observed —
+          the protocol, cipher suite, certificate detail, header, or script
+          reference the finding is about — and the same severity and
+          recommendation. Your repository is not uploaded, no file is sent in
+          full, and nothing is sent about a site beyond the finding itself.
         </p>
         <p className="doc-text">
           Those requests are subject to OpenRouter&apos;s handling of data and
           the policies of whichever model provider serves them. If a finding&apos;s
-          flagged line would itself be sensitive, do not use these two features
+          flagged line, or the URL it names, would itself be sensitive, do not
+          use these features
           on it. Generated explanations and diffs are cached on our side, keyed
           by a hash of the finding, so that asking twice does not send it twice.
         </p>
@@ -96,9 +135,12 @@ export default function Privacy() {
       <section className="doc-section">
         <h2 className="doc-heading">Third parties we talk to</h2>
         <p className="doc-text">
-          Three, and only when a feature needs them: GitHub, to read repository
+          Two services, and only when a feature needs them: GitHub, to read
+          repository
           contents and to authenticate you if you choose to sign in with it;
-          OpenRouter, for the two AI features described above; and nothing else.
+          and OpenRouter, for the two AI features described above. Beyond those,
+          the only other host QLint contacts is a site you have asked it to
+          scan, which it reaches directly and only for that scan.
           We do not sell data, and we do not share it with anyone beyond what a
           request you made requires.
         </p>

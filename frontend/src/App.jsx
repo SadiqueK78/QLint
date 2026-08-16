@@ -172,6 +172,19 @@ function repoNameFromUrl(url) {
   return `${match[1]}/${match[2].replace(/\.git$/, "")}`;
 }
 
+// A scanned site's host, for a list that is ranking hosts. The scheme and a
+// trailing slash are noise in a narrow column and identical on nearly every
+// row; the full URL stays in the row's title attribute. Anything that does not
+// parse is shown exactly as it was stored rather than silently blanked.
+function siteNameFromUrl(url) {
+  if (!url) return url;
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
 function truncateEmail(email, max = 20) {
   if (!email || email.length <= max) return email;
   return `${email.slice(0, max - 3)}...`;
@@ -912,46 +925,58 @@ function ScanInputCard({
 // What each scanner actually reads, rather than a row of language names with
 // nothing behind them. The detail is the point: it is what tells a reader
 // whether their codebase is covered before they spend a scan finding out.
+//
+// `example` is a real repository with real cryptography in that language, one
+// click away from being scanned. These used to be listed on the Help page,
+// which is the one page a first-time visitor does not open: somebody who does
+// not already have a repository URL in mind is looking at this row of cards,
+// not at an FAQ. Same URLs, moved to where the decision is actually made.
 const LANGUAGES = [
   {
     name: "Python",
     status: "active",
     extensions: ".py",
     detail: "Full AST walk: imports, calls, and attribute access",
+    example: "https://github.com/paramiko/paramiko",
   },
   {
     name: "JavaScript",
     status: "active",
     extensions: ".js .jsx .mjs .cjs",
     detail: "node:crypto, WebCrypto, and common library calls",
+    example: "https://github.com/auth0/node-jsonwebtoken",
   },
   {
     name: "TypeScript",
     status: "active",
     extensions: ".ts .tsx",
     detail: "Same detection as JavaScript, type syntax tolerated",
+    example: "https://github.com/panva/jose",
   },
   {
     name: "Go",
     status: "active",
     extensions: ".go",
     detail: "crypto/* imports, tls.Config, and key generation",
+    example: "https://github.com/golang-jwt/jwt",
   },
   {
     name: "Java",
     status: "active",
     extensions: ".java",
     detail: "JCA/JCE getInstance calls and Bouncy Castle classes",
+    example: "https://github.com/bcgit/bc-java",
   },
   {
     name: "Rust",
     status: "active",
     extensions: ".rs",
     detail: "RustCrypto, ring, and openssl crate paths",
+    example: "https://github.com/RustCrypto/RSA",
   },
 ];
 
-function LanguagesStrip() {
+function LanguagesStrip({ onPickExample }) {
   // Counted from the table rather than written out, so the caption cannot go
   // stale the next time a language ships.
   const active = LANGUAGES.filter((lang) => lang.status === "active").length;
@@ -981,6 +1006,20 @@ function LanguagesStrip() {
               </div>
               <div className="lang-ext">{lang.extensions}</div>
               <div className="lang-detail">{lang.detail}</div>
+              {lang.example && (
+                // A button rather than an anchor on purpose: following the
+                // link to GitHub is not what anyone reading this wants. The
+                // useful action is putting the URL in the scan box, so the
+                // click does that and scrolls back up to it.
+                <button
+                  className="lang-example"
+                  type="button"
+                  onClick={() => onPickExample?.(lang.example)}
+                  title={`Put ${lang.example} in the scan box`}
+                >
+                  Example repo to scan
+                </button>
+              )}
             </div>
           ))}
         </div>
@@ -2760,6 +2799,21 @@ function AdminPanel({
                   count: repo.scan_count,
                 }))}
               />
+              {/* Its own panel beside the repositories, not merged into
+                  them: the two rank different things and a combined list
+                  would have to pretend a site and a repository are
+                  comparable. Defaulted because a backend that has not
+                  redeployed yet does not send this field. */}
+              <TopList
+                title="Most Scanned Websites"
+                emptyText="No website scans yet."
+                rows={(stats.most_scanned_websites ?? []).map((site) => ({
+                  key: site.target_url,
+                  title: site.target_url,
+                  label: siteNameFromUrl(site.target_url),
+                  count: site.scan_count,
+                }))}
+              />
               <TopList
                 title="Most Active Users"
                 emptyText="No users yet."
@@ -3531,6 +3585,27 @@ export default function App() {
     setView("input");
   };
 
+  // One of the example repositories under the language cards. It fills the
+  // scan box rather than starting the scan: the click is "show me what this
+  // looks like", and a scan spends API quota and a stored report, so the last
+  // step stays deliberate.
+  //
+  // The mode is switched with it because these are repository URLs, and a
+  // reader who left the picker on Website would otherwise get a validation
+  // error for a box they just watched fill itself in. Any stale error from a
+  // previous attempt goes too, for the same reason.
+  const pickExampleRepo = (url) => {
+    setScanMode(SCAN_MODE_REPOSITORY);
+    setRepoUrl(url);
+    setUrlError(null);
+    setError(null);
+    // The cards sit below the scan box, so without this the input that just
+    // changed is off-screen and the click looks like it did nothing.
+    document
+      .getElementById("scan-input")
+      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
+
   const handleReset = () => {
     // Reset is also how the user leaves a running scan (the home button), so
     // drop the request rather than leaving the backend fetching for a view
@@ -3627,7 +3702,7 @@ export default function App() {
                 error={error}
                 onClearError={() => setError(null)}
               />
-              <LanguagesStrip />
+              <LanguagesStrip onPickExample={pickExampleRepo} />
             </>
           )}
           {!activePage && view === "scanning" && (

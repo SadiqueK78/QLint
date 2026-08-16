@@ -684,6 +684,28 @@ input {
   margin-top: 6px;
 }
 
+/* A button that reads as a link: the action is in the app, not a navigation,
+   but the affordance a reader looks for here is a link. Sized below
+   .lang-detail so it sits under the card's prose rather than competing with
+   the language name at the top. */
+.lang-example {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 0;
+  border: none;
+  background: none;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--info);
+  cursor: pointer;
+  text-align: left;
+}
+
+.lang-example:hover {
+  text-decoration: underline;
+}
+
 .lang-tag {
   font-size: 10px;
   font-weight: 600;
@@ -3341,6 +3363,14 @@ input {
   flex-wrap: wrap;
 }
 
+/* Separates the project guide from the team. The .team-list gap already
+   spaces the cards, so this only has to draw the line itself. */
+.team-divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 0;
+}
+
 .team-name {
   font-size: 16px;
   font-weight: 600;
@@ -3574,32 +3604,6 @@ input {
   font-size: 13.5px;
   font-weight: 500;
   color: var(--info);
-}
-
-/* One repository per line: the language names the column, the full URL is the
-   clickable part so it can be read before it is followed. */
-.faq-repo-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.faq-repo {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.faq-repo-lang {
-  font-size: 13.5px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  min-width: 84px;
-}
-
-.faq-repo .faq-link {
-  word-break: break-word;
 }
 
 /* ----------------------------------------------------- benchmark lede */

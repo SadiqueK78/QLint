@@ -25,6 +25,17 @@ export default function Terms() {
           exposure, and can generate written explanations and migration diffs
           for individual findings.
         </p>
+        <p className="doc-text">
+          A scan can also be pointed at a website rather than a repository. In
+          that mode QLint connects to the live, publicly reachable site at the
+          URL you give it and inspects three things a browser would see anyway:
+          the TLS configuration the server negotiates, the HTTP response
+          headers it returns, and the JavaScript files the page references. It
+          reads; it does not log in, submit anything, or attempt to change the
+          site in any way. Private, internal, and otherwise non-public network
+          destinations are not reachable through this feature, and the service
+          refuses them rather than relying on you not to ask.
+        </p>
       </section>
 
       <section className="doc-section">
@@ -42,11 +53,16 @@ export default function Terms() {
       <section className="doc-section">
         <h2 className="doc-heading">Acceptable use</h2>
         <p className="doc-text">
-          Scan repositories you own or are otherwise allowed to analyse. Do not
-          use QLint to attack, overload, or probe infrastructure that is not
-          yours. The scanning, AI explanation, and patch generation endpoints
+          Scan repositories you own or are otherwise allowed to analyse. The
+          same applies to websites: point a website scan at a site you own or
+          have permission to test. A website scan is a small number of ordinary
+          requests rather than an attack, but it is still traffic sent to
+          somebody&apos;s server in your name. Do not use QLint to attack,
+          overload, or probe infrastructure that is not yours. The scanning, AI
+          explanation, and patch generation endpoints
           are rate limited per client because each one costs us either GitHub
-          API quota or model spend; do not attempt to work around those limits
+          API quota, outbound requests, or model spend; do not attempt to work
+          around those limits
           through automation, distributed clients, or forged headers. Do not use
           the AI endpoints to generate content unrelated to cryptographic
           migration.
@@ -67,6 +83,15 @@ export default function Terms() {
           compliance grade or a certification.
         </p>
         <p className="doc-text">
+          A website scan is narrower still: it describes what one server
+          answered on one connection at one moment. It covers the TLS
+          configuration, the response headers, and the referenced JavaScript,
+          and nothing beyond that — not the application behind the site, not
+          its data, and not any host other than the one you named. A site can
+          change between scans, and a clean report is not a security
+          assessment.
+        </p>
+        <p className="doc-text">
           AI explanations and generated migration patches are produced by a
           language model and are not verified. Read every generated diff before
           applying it; line numbers in a patch are approximate and only you can
@@ -82,7 +107,9 @@ export default function Terms() {
           You keep all rights to the code you scan. QLint reads repositories
           through the GitHub API and does not store their contents. If you sign
           in, we store the scan reports generated for your account so you can
-          reopen them, and you can delete any of them from My Scans. The{" "}
+          reopen them, and you can delete any of them from My Scans. Website
+          scan reports are kept the same way, under the same account, and are
+          listed and deleted alongside repository reports. The{" "}
           <a href="/privacy">Privacy Policy</a> sets out what is collected in
           detail.
         </p>

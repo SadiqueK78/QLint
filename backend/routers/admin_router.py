@@ -7,15 +7,25 @@ move when a user tidies up their list. Do not add VISIBLE_SCAN to the queries
 below: total_scans, the per-repo and per-algorithm aggregates, and the severity
 totals are meant to describe everything QLint has ever run.
 
-Three of them do filter on scan_type (database.REPOSITORY_SCAN), which is a
-different thing and not a weakening of the above. The collection holds website
-scans as well as repository scans now, and those three read fields only a
-repository scan has -- repo_url, result.findings_by_file,
-result.severity_summary. Grouping websites into "most scanned repositories"
-does not produce a smaller number, it produces a wrong one: a blank row that
-can outrank real repositories. The counts that are genuinely about "how much
-has this service done" -- total_scans, scans_today, scans_this_week -- stay
-unfiltered and count both kinds, because both kinds are scans.
+Several of them do filter on scan_type, which is a different thing and not a
+weakening of the above. The collection holds website scans as well as
+repository scans, and the two report shapes do not carry the same fields --
+repo_url, result.findings_by_file and result.severity_summary belong to a
+repository scan, target_url and a flat result.findings list to a website one.
+A query reads the shape it is about. The counts that are genuinely about "how
+much has this service done" -- total_scans, scans_today, scans_this_week --
+stay unfiltered and count both kinds, because both kinds are scans.
+
+Which way a given aggregate goes is a question about what the number means,
+answered one at a time rather than by a rule:
+
+  * most_scanned_repos and most_scanned_websites are two lists because they
+    group on two different fields. Neither is a filtered view of the other.
+  * algorithms_most_found is one list built from two pipelines, because "which
+    algorithms is this platform finding" is one question: RSA in a source file
+    and RSA on a certificate are the same detection twice.
+  * severity_totals stays repository-only, because a website report has no
+    severity_summary to add.
 """
 
 import os
@@ -28,7 +38,13 @@ from pymongo import DESCENDING
 from pymongo.errors import PyMongoError
 
 from auth import get_admin_user, to_object_id
-from database import REPOSITORY_SCAN, SCAN_TYPE_REPOSITORY, get_scans, get_users
+from database import (
+    REPOSITORY_SCAN,
+    SCAN_TYPE_REPOSITORY,
+    WEBSITE_SCAN,
+    get_scans,
+    get_users,
+)
 
 load_dotenv()
 
@@ -60,6 +76,50 @@ def _worst(severities: list[str]) -> str:
     if not ranked:
         return "info"
     return min(ranked, key=lambda s: SEVERITY_RANK[s])
+
+
+def _merge_algorithms(*grouped: list[dict]) -> list[dict]:
+    """One ranked top-N list from several per-shape algorithm aggregates.
+
+    The counts arrive as separate pipelines because repository and website
+    reports store their findings differently, but "most detected algorithms" is
+    a question about the platform, not about a report shape: RSA found in code
+    and RSA found on a certificate are the same algorithm being detected twice,
+    and the dashboard says so with one row.
+
+    Neither input is truncated to TOP_N before it gets here, and that is the
+    point of merging in Python rather than taking the top five of each. An
+    algorithm sitting sixth in both lists can outrank a fifth-placed one once
+    the two are added, so slicing first would produce a ranking that is wrong
+    in exactly the cases the merge exists for. The lists are small enough to
+    add in full -- their length is bounded by the number of algorithms
+    CRYPTO_DB knows, not by the number of scans.
+
+    Rows with no algorithm name are dropped rather than grouped under a blank
+    label: a finding that names nothing (an HTTP header finding, say) is not an
+    algorithm detection.
+    """
+    counts: dict[str, int] = {}
+    severities: dict[str, list[str]] = {}
+    for rows in grouped:
+        for row in rows:
+            name = row.get("_id")
+            if not name:
+                continue
+            counts[name] = counts.get(name, 0) + int(row.get("count") or 0)
+            severities.setdefault(name, []).extend(row.get("severities") or [])
+
+    # Ties break on the name, so the order is stable between requests rather
+    # than following whichever pipeline happened to answer first.
+    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    return [
+        {
+            "algorithm": name,
+            "count": count,
+            "severity": _worst(severities.get(name, [])),
+        }
+        for name, count in ranked[:TOP_N]
+    ]
 
 
 @router.post("/make-admin")
@@ -111,8 +171,6 @@ async def stats(admin: dict = Depends(get_admin_user)):
         # groups on repo_url, which a website scan does not have. Without it
         # every website scan ever run would collapse into a single _id: null
         # row that renders as a blank repository and can outrank real ones.
-        # There is no "most scanned websites" here yet; not counting them is
-        # the correct answer for a list of repositories, not an omission.
         most_scanned = await scans.aggregate(
             [
                 {"$match": dict(REPOSITORY_SCAN)},
@@ -122,21 +180,37 @@ async def stats(admin: dict = Depends(get_admin_user)):
             ]
         ).to_list(length=TOP_N)
 
+        # The website half of the same question, and deliberately a second
+        # aggregate rather than a widening of the one above. The two group on
+        # different fields -- repo_url and target_url -- so there is no single
+        # pipeline that answers both without inventing a merged key, and the
+        # dashboard asks them as two questions anyway: a repository and a site
+        # are not ranked against each other in one list.
+        most_scanned_sites = await scans.aggregate(
+            [
+                {"$match": dict(WEBSITE_SCAN)},
+                {"$group": {"_id": "$target_url", "scan_count": {"$sum": 1}}},
+                {"$sort": {"scan_count": DESCENDING, "_id": 1}},
+                {"$limit": TOP_N},
+            ]
+        ).to_list(length=TOP_N)
+
         top_users = await users.find(
             {}, {"email": 1, "scan_count": 1}
         ).sort("scan_count", DESCENDING).limit(TOP_N).to_list(length=TOP_N)
 
-        # findings_by_file is an object keyed by path, so convert it to an
-        # array before unwinding down to individual findings.
+        # "Most detected algorithms" is one question about the whole platform,
+        # and it takes two pipelines to answer because the two report shapes
+        # store their findings differently. Neither pipeline is the whole
+        # answer; they are merged below.
         #
-        # Repository scans only, for two reasons. findings_by_file is a
-        # repository report's shape -- a website report carries a flat findings
-        # list -- so $objectToArray would be handed a field that is not there,
-        # and a pipeline stage fed a missing document is not something to find
-        # out about in production. And the numbers would be wrong even if it
-        # ran: nothing under findings_by_file exists on a website scan, so a
-        # site full of vulnerable JavaScript would silently count as zero.
-        algorithms = await scans.aggregate(
+        # This one is the repository half. findings_by_file is an object keyed
+        # by path, so convert it to an array before unwinding down to
+        # individual findings -- and it stays matched to repository scans for
+        # the reason it always was: a website report has no findings_by_file,
+        # and $objectToArray on a field that is not there is a server error,
+        # not an empty result.
+        repository_algorithms = await scans.aggregate(
             [
                 {"$match": dict(REPOSITORY_SCAN)},
                 {"$project": {"files": {"$objectToArray": "$result.findings_by_file"}}},
@@ -151,9 +225,67 @@ async def stats(admin: dict = Depends(get_admin_user)):
                     }
                 },
                 {"$sort": {"count": DESCENDING, "_id": 1}},
-                {"$limit": TOP_N},
             ]
-        ).to_list(length=TOP_N)
+        ).to_list(length=None)
+
+        # The website half. A website report carries a flat result.findings
+        # array -- no per-file grouping, because a TLS cipher suite or a
+        # response header is not tied to a file -- so this unwinds one level
+        # instead of two and never touches $objectToArray.
+        #
+        # Two fields need a fallback, and both are about the three domains a
+        # website report merges:
+        #
+        #   canonical_algorithm is CRYPTO_DB's name for whatever the scanner
+        #   observed, and it is what makes this mergeable with the repository
+        #   counts at all: a TLS key exchange reports as "ECDH" where the code
+        #   scanner reports the same primitive as "ECC". Grouping on the raw
+        #   name would rank one algorithm as two rows. Falling back to
+        #   `algorithm` covers a finding CRYPTO_DB does not recognise.
+        #
+        #   db_severity is CRYPTO_DB's verdict, which is the vocabulary the
+        #   repository half counts in and the one _worst() ranks. TLS findings
+        #   carry it alongside their own "how broken is this site today"
+        #   severity; JavaScript findings are rated on CRYPTO_DB's axis
+        #   natively and carry only `severity`. Taking the first that exists
+        #   gets both right.
+        #
+        # Header findings fall out on their own: they name no algorithm, so the
+        # null _id is dropped in the merge below, exactly as an unnamed
+        # repository finding is.
+        website_algorithms = await scans.aggregate(
+            [
+                {"$match": dict(WEBSITE_SCAN)},
+                {"$unwind": "$result.findings"},
+                {
+                    "$project": {
+                        "algorithm": {
+                            "$ifNull": [
+                                "$result.findings.canonical_algorithm",
+                                "$result.findings.algorithm",
+                            ]
+                        },
+                        "severity": {
+                            "$ifNull": [
+                                "$result.findings.db_severity",
+                                "$result.findings.severity",
+                            ]
+                        },
+                    }
+                },
+                {"$match": {"severity": {"$ne": "info"}}},
+                {
+                    "$group": {
+                        "_id": "$algorithm",
+                        "count": {"$sum": 1},
+                        "severities": {"$addToSet": "$severity"},
+                    }
+                },
+                {"$sort": {"count": DESCENDING, "_id": 1}},
+            ]
+        ).to_list(length=None)
+
+        algorithms = _merge_algorithms(repository_algorithms, website_algorithms)
 
         # Repository scans only, so this total keeps meaning exactly what it
         # meant before websites existed. result.severity_summary is a
@@ -188,19 +320,17 @@ async def stats(admin: dict = Depends(get_admin_user)):
             {"repo_url": row["_id"] or "", "scan_count": row["scan_count"]}
             for row in most_scanned
         ],
+        "most_scanned_websites": [
+            {"target_url": row["_id"] or "", "scan_count": row["scan_count"]}
+            for row in most_scanned_sites
+        ],
         "top_users": [
             {"email": row.get("email", ""), "scan_count": int(row.get("scan_count", 0))}
             for row in top_users
         ],
-        "algorithms_most_found": [
-            {
-                "algorithm": row["_id"],
-                "count": row["count"],
-                "severity": _worst(row.get("severities", [])),
-            }
-            for row in algorithms
-            if row["_id"]
-        ],
+        # Already ranked, already trimmed to TOP_N, and already free of
+        # unnamed rows: see _merge_algorithms.
+        "algorithms_most_found": algorithms,
         "severity_totals": {
             "critical": int(totals.get("critical") or 0),
             "warning": int(totals.get("warning") or 0),

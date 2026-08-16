@@ -15,20 +15,6 @@ const FAQ = [
     ],
   },
   {
-    q: "Want to try QLint without picking a repo?",
-    a: [
-      "Here are example repos with real cryptography usage for each supported language, ready to paste in:",
-    ],
-    repos: [
-      { language: "Python", url: "https://github.com/paramiko/paramiko" },
-      { language: "JavaScript", url: "https://github.com/auth0/node-jsonwebtoken" },
-      { language: "TypeScript", url: "https://github.com/panva/jose" },
-      { language: "Go", url: "https://github.com/golang-jwt/jwt" },
-      { language: "Java", url: "https://github.com/bcgit/bc-java" },
-      { language: "Rust", url: "https://github.com/RustCrypto/RSA" },
-    ],
-  },
-  {
     q: "What does signing in unlock?",
     a: [
       "Scanning itself, first of all: a scan spends GitHub API quota and writes a stored report, so it runs against an account rather than anonymously. Every scan you run is then saved under your name, which is what My Scans lists and what the HNDL Risk Calculator scores.",
@@ -168,23 +154,6 @@ function FaqItem({ entry, open, onToggle }) {
               {paragraph}
             </p>
           ))}
-          {entry.repos && (
-            <ul className="faq-repo-list">
-              {entry.repos.map((repo) => (
-                <li className="faq-repo" key={repo.url}>
-                  <span className="faq-repo-lang">{repo.language}</span>
-                  <a
-                    className="faq-link"
-                    href={repo.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    {repo.url}
-                  </a>
-                </li>
-              ))}
-            </ul>
-          )}
           {entry.link && (
             <a
               className="faq-link"

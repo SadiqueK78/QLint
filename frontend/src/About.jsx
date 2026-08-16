@@ -1,6 +1,16 @@
 // Static content page. The team list lives here rather than in a config file
 // because nothing else reads it and there is no server to fetch it from.
 
+// The project guide, listed above the team and separated from it by a rule.
+// Kept as its own value rather than a fourth TEAM entry because the divider
+// has to fall in exactly one place, and a flag on a list item to say "draw a
+// line after me" is a worse way to spell that than two lists.
+const GUIDE = {
+  name: "Dr. Uday Wad",
+  role: "Project Guide",
+  linkedin: "https://www.linkedin.com/in/uday-wad-8740b41a1",
+};
+
 const TEAM = [
   {
     name: "Abhushan Bokade",
@@ -22,6 +32,42 @@ const TEAM = [
   },
 ];
 
+// One card, whatever it is a card for, so the guide cannot drift away from the
+// team visually the next time either is edited. Each link renders only if the
+// entry has it: not everyone listed here has both.
+function TeamCard({ member }) {
+  return (
+    <div className="team-card">
+      <div className="team-identity">
+        <div className="team-name">{member.name}</div>
+        <div className="team-role">{member.role}</div>
+      </div>
+      <div className="team-links">
+        {member.github && (
+          <a
+            className="team-link"
+            href={member.github}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            GitHub
+          </a>
+        )}
+        {member.linkedin && (
+          <a
+            className="team-link"
+            href={member.linkedin}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            LinkedIn
+          </a>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function About() {
   return (
     <div className="page">
@@ -29,31 +75,10 @@ export default function About() {
         <h1 className="page-title">About Us</h1>
       </div>
       <div className="team-list">
+        <TeamCard member={GUIDE} />
+        <hr className="team-divider" />
         {TEAM.map((member) => (
-          <div className="team-card" key={member.name}>
-            <div className="team-identity">
-              <div className="team-name">{member.name}</div>
-              <div className="team-role">{member.role}</div>
-            </div>
-            <div className="team-links">
-              <a
-                className="team-link"
-                href={member.github}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                GitHub
-              </a>
-              <a
-                className="team-link"
-                href={member.linkedin}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                LinkedIn
-              </a>
-            </div>
-          </div>
+          <TeamCard member={member} key={member.name} />
         ))}
       </div>
     </div>

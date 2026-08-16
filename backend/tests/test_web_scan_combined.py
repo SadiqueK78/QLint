@@ -56,11 +56,17 @@ import cbom_converter
 import tls_scanner
 from auth import get_admin_user, get_current_user
 from cbom_converter import convert_to_cbom, convert_website_to_cbom
-from database import REPOSITORY_SCAN, SCAN_TYPE_REPOSITORY, SCAN_TYPE_WEBSITE
+from database import (
+    REPOSITORY_SCAN,
+    SCAN_TYPE_REPOSITORY,
+    SCAN_TYPE_WEBSITE,
+    WEBSITE_SCAN,
+)
 from routers import admin_router as admin_module
 from routers import hndl_router as hndl_module
 from routers import user_router as user_module
 from routers import web_scan_router as web_scan_module
+from routers.admin_router import _merge_algorithms
 from routers.admin_router import router as admin_router
 from routers.hndl_router import router as hndl_router
 from routers.user_router import router as user_router
@@ -1368,6 +1374,19 @@ def _expression(document, expression):
                     "$objectToArray on a non-document input"
                 )
             return [{"k": key, "v": item} for key, item in value.items()]
+        if set(expression) == {"$ifNull"}:
+            # The server's semantics exactly: the first operand that is not
+            # null, and the last one if none of them are. That last clause is
+            # what makes a missing field come out as null rather than raising,
+            # which is the behaviour the website algorithm pipeline leans on --
+            # a JavaScript finding has no db_severity and a TLS finding has no
+            # top-level severity in CRYPTO_DB's vocabulary.
+            candidates = expression["$ifNull"]
+            for candidate in candidates[:-1]:
+                value = _expression(document, candidate)
+                if value is not None:
+                    return value
+            return _expression(document, candidates[-1])
         raise _PipelineUnsupported(str(expression))
     return expression
 
@@ -1732,6 +1751,28 @@ class TestAdminStatsWithAMixedCollection:
             {"repo_url": "https://github.com/acme/legacy", "scan_count": 1},
         ]
 
+    def test_most_scanned_websites_lists_the_scanned_site(self, admin_client):
+        body = admin_client.get("/admin/stats").json()
+        assert body["most_scanned_websites"] == [
+            {"target_url": TARGET, "scan_count": 1}
+        ]
+
+    def test_most_scanned_websites_contains_no_repository(self, admin_client):
+        """The mirror of the guard on most_scanned_repos. A repository scan has
+        no target_url, so an unfiltered group would collapse all three into one
+        blank row and rank it first."""
+        body = admin_client.get("/admin/stats").json()
+        urls = [row["target_url"] for row in body["most_scanned_websites"]]
+        assert "" not in urls
+        assert not any(url.startswith("https://github.com/") for url in urls)
+
+    def test_the_two_most_scanned_lists_do_not_overlap(self, admin_client):
+        body = admin_client.get("/admin/stats").json()
+        repos = {row["repo_url"] for row in body["most_scanned_repos"]}
+        sites = {row["target_url"] for row in body["most_scanned_websites"]}
+        assert repos.isdisjoint(sites)
+        assert len(repos) == 2 and len(sites) == 1
+
     def test_a_scan_stored_before_scan_type_existed_is_still_counted(
         self, admin_client
     ):
@@ -1743,20 +1784,54 @@ class TestAdminStatsWithAMixedCollection:
         urls = [row["repo_url"] for row in body["most_scanned_repos"]]
         assert "https://github.com/acme/legacy" in urls
 
-    def test_the_algorithm_aggregate_is_unchanged_by_the_website_scan(
-        self, admin_client
-    ):
+    def test_the_algorithm_aggregate_counts_both_kinds_of_scan(self, admin_client):
+        """One ranked list over the whole collection.
+
+        RSA is the row that proves the merge rather than a concatenation: the
+        three repository scans contribute one finding each, the website scan
+        contributes two (its certificate and an inline script), and the answer
+        is a single row of 5 rather than two rows of 3 and 2.
+        """
         body = admin_client.get("/admin/stats").json()
         assert body["algorithms_most_found"] == [
-            {"algorithm": "RSA", "count": 3, "severity": "critical"},
+            {"algorithm": "RSA", "count": 5, "severity": "critical"},
             {"algorithm": "SHA-256", "count": 3, "severity": "warning"},
+            {"algorithm": "ECC", "count": 1, "severity": "critical"},
+            {"algorithm": "ECDH", "count": 1, "severity": "critical"},
+            {"algorithm": "TLS 1.3", "count": 1, "severity": "safe"},
         ]
 
-    def test_the_website_scans_javascript_findings_do_not_leak_in(self, admin_client):
-        """The website report has ECC findings; the repository scans do not.
-        An unfiltered pipeline that somehow read them would show ECC here."""
+    def test_the_website_scans_javascript_findings_are_counted(self, admin_client):
+        """The inverse of what this test asserted before websites were part of
+        this aggregate. ECC appears in the website report's JavaScript findings
+        and in no repository scan, so its presence here is proof the second
+        pipeline ran and reached the flat findings list."""
         body = admin_client.get("/admin/stats").json()
-        assert "ECC" not in [row["algorithm"] for row in body["algorithms_most_found"]]
+        assert "ECC" in [row["algorithm"] for row in body["algorithms_most_found"]]
+
+    def test_a_website_finding_that_names_no_algorithm_is_not_a_row(
+        self, admin_client
+    ):
+        """The header findings carry a severity and no algorithm at all. They
+        must not become a blank-labelled row -- the same failure the repository
+        aggregate has always guarded against, arriving from the other shape."""
+        body = admin_client.get("/admin/stats").json()
+        labels = [row["algorithm"] for row in body["algorithms_most_found"]]
+        assert "" not in labels
+        assert None not in labels
+        assert "Referrer-Policy" not in labels
+
+    def test_a_website_findings_severity_is_read_in_cryptodbs_vocabulary(
+        self, admin_client
+    ):
+        """ECDH is reported by tls_scanner as "Medium" on its own axis and
+        "critical" as db_severity. The dashboard ranks severities in the second
+        vocabulary, so reading the first would colour a quantum-broken key
+        exchange as info."""
+        body = admin_client.get("/admin/stats").json()
+        rows = {row["algorithm"]: row for row in body["algorithms_most_found"]}
+        assert rows["ECDH"]["severity"] == "critical"
+        assert rows["TLS 1.3"]["severity"] == "safe"
 
     def test_the_severity_totals_count_repository_scans_only(self, admin_client):
         body = admin_client.get("/admin/stats").json()
@@ -1767,15 +1842,21 @@ class TestAdminStatsWithAMixedCollection:
             "info": 0,
         }
 
-    def test_the_repository_only_aggregates_all_filter_on_scan_type(
+    def test_every_aggregate_starts_by_choosing_a_scan_type(
         self, admin_client, mixed_collection
     ):
-        """Three pipelines, three $match stages, and each one is the first
-        stage -- a filter after $objectToArray would already have failed."""
+        """Five pipelines now, and the property that matters is unchanged: each
+        one declares which shape it reads, and declares it first.
+
+        A $match placed after $objectToArray or after an $unwind of
+        result.findings would already have been handed the wrong shape by the
+        time it ran, so "is a $match" is not enough -- it has to be stage zero.
+        """
         admin_client.get("/admin/stats")
-        assert len(mixed_collection.pipelines) == 3
-        for pipeline in mixed_collection.pipelines:
-            assert pipeline[0] == {"$match": dict(REPOSITORY_SCAN)}
+        assert len(mixed_collection.pipelines) == 5
+        matches = [pipeline[0] for pipeline in mixed_collection.pipelines]
+        assert matches.count({"$match": dict(REPOSITORY_SCAN)}) == 3
+        assert matches.count({"$match": dict(WEBSITE_SCAN)}) == 2
 
     def test_the_total_counts_include_both_kinds(self, admin_client):
         """Not everything is filtered, and that is the point of filtering only
@@ -1791,6 +1872,212 @@ class TestAdminStatsWithAMixedCollection:
         """A website scan is stored without expires_at, so it can never match
         this count -- no filter needed, and none added."""
         assert admin_client.get("/admin/stats").json()["cached_scans"] == 3
+
+
+SECOND_SITE = "https://shop.example.org"
+
+# A repository scan whose findings overlap the website scan's, which is what
+# makes the merge observable: ECC is found in code here and on a TLS handshake
+# below, and one algorithm detected twice is one row.
+_MERGE_REPO_DOCUMENT = {
+    "_id": ObjectId("652f1f77bcf86cd7994391a1"),
+    "scan_type": SCAN_TYPE_REPOSITORY,
+    "repo_url": "https://github.com/acme/crypto",
+    "user_id": str(SCAN_USER["_id"]),
+    "scanned_by": SCAN_USER["email"],
+    "created_at": NOW,
+    "result": {
+        "pqc_readiness_score": 55,
+        "total_findings": 2,
+        "severity_summary": {"critical": 1, "warning": 0, "safe": 0, "info": 1},
+        "findings_by_file": {
+            "tls.py": [
+                {"file": "tls.py", "line": 4, "algorithm": "ECC",
+                 "severity": "critical", "quantum_vulnerable": True},
+                # Excluded by the severity filter, on both sides.
+                {"file": "tls.py", "line": 9, "algorithm": "RSA",
+                 "severity": "info"},
+            ]
+        },
+    },
+}
+
+# The shape /web-scan actually stores: three domains in one flat list, each
+# finding tagged with its category and stamped with CRYPTO_DB's name for
+# whatever the scanner observed.
+_MERGE_WEBSITE_DOCUMENT = {
+    "_id": ObjectId("652f1f77bcf86cd7994391b1"),
+    "scan_type": SCAN_TYPE_WEBSITE,
+    "target_url": SECOND_SITE,
+    "user_id": str(SCAN_USER["_id"]),
+    "scanned_by": SCAN_USER["email"],
+    "created_at": NOW,
+    "result": {
+        "url": SECOND_SITE,
+        "total_findings": 5,
+        "findings": [
+            # tls_scanner's two severities, and the canonical name that makes
+            # this the same detection as the repository scan's ECC finding.
+            {"asset": "ECDHE", "algorithm": "ECDH", "canonical_algorithm": "ECC",
+             "severity": "Medium", "db_severity": "critical",
+             "category": CATEGORY_TLS},
+            {"asset": "SHA256withRSA", "algorithm": "SHA256withRSA",
+             "canonical_algorithm": "RSA", "severity": "Low",
+             "db_severity": "warning", "category": CATEGORY_CERTIFICATE},
+            # A JavaScript finding: rated on CRYPTO_DB's axis natively, so it
+            # carries severity and no db_severity at all.
+            {"file": "https://cdn.example.org/app.js", "line": 12,
+             "algorithm": "AES-128", "severity": "warning",
+             "category": CATEGORY_JAVASCRIPT},
+            {"file": "https://cdn.example.org/app.js", "line": 30,
+             "algorithm": "SHA-1", "severity": "info",
+             "category": CATEGORY_JAVASCRIPT},
+            # A header finding: a real finding that names no algorithm.
+            {"asset": "Strict-Transport-Security", "severity": "Low",
+             "category": CATEGORY_HTTP_HEADER},
+        ],
+    },
+}
+
+# A second scan of the same site whose report carries no findings list at all.
+# Not a hypothetical shape: a scan where every sub-check failed stores its
+# errors and nothing else, and $unwind must skip it rather than fail.
+_MERGE_EMPTY_WEBSITE_DOCUMENT = {
+    "_id": ObjectId("652f1f77bcf86cd7994391b2"),
+    "scan_type": SCAN_TYPE_WEBSITE,
+    "target_url": SECOND_SITE,
+    "user_id": str(SCAN_USER["_id"]),
+    "scanned_by": SCAN_USER["email"],
+    "created_at": NOW,
+    "result": {"url": SECOND_SITE, "scan_errors": ["TLS scan failed"]},
+}
+
+
+@pytest.fixture
+def merge_client(monkeypatch):
+    """/admin/stats over a collection built to exercise the merge itself."""
+    collection = MixedScans(
+        [
+            dict(_MERGE_REPO_DOCUMENT),
+            dict(_MERGE_WEBSITE_DOCUMENT),
+            dict(_MERGE_EMPTY_WEBSITE_DOCUMENT),
+        ]
+    )
+    users = FakeUsers([{"_id": ObjectId(), "email": SCAN_USER["email"], "scan_count": 3}])
+    monkeypatch.setattr(admin_module, "get_scans", lambda: collection)
+    monkeypatch.setattr(admin_module, "get_users", lambda: users)
+
+    application = FastAPI()
+    application.include_router(admin_router)
+    application.dependency_overrides[get_admin_user] = lambda: {
+        "_id": "652f1f77bcf86cd7994390ff",
+        "email": "admin@qlint.dev",
+        "role": "admin",
+    }
+    yield TestClient(application)
+    application.dependency_overrides.clear()
+
+
+class TestTheMergedAlgorithmAggregate:
+    """The merge, against the document shapes /web-scan actually writes."""
+
+    def test_the_endpoint_answers_over_both_shapes(self, merge_client):
+        """The blunt one, and the one the original bug would have failed: a
+        pipeline handed the wrong report shape is a 500, not an empty row."""
+        assert merge_client.get("/admin/stats").status_code == 200
+
+    def test_a_website_report_with_no_findings_list_is_skipped_not_fatal(
+        self, merge_client
+    ):
+        """$unwind on a path that is not there drops the document. If it did
+        anything else, the whole dashboard would go down over one failed
+        scan."""
+        body = merge_client.get("/admin/stats").json()
+        assert body["total_scans"] == 3
+        assert [row["algorithm"] for row in body["algorithms_most_found"]]
+
+    def test_one_algorithm_found_in_both_shapes_is_one_row(self, merge_client):
+        """ECC is found once in code and once on a TLS handshake, where the
+        scanner called it ECDH. Grouping on the raw name would rank it as two
+        rows of 1; the canonical name is what makes it one row of 2."""
+        body = merge_client.get("/admin/stats").json()
+        rows = {row["algorithm"]: row for row in body["algorithms_most_found"]}
+        assert rows["ECC"]["count"] == 2
+        assert rows["ECC"]["severity"] == "critical"
+        assert "ECDH" not in rows
+
+    def test_the_whole_ranked_list(self, merge_client):
+        body = merge_client.get("/admin/stats").json()
+        assert body["algorithms_most_found"] == [
+            {"algorithm": "ECC", "count": 2, "severity": "critical"},
+            {"algorithm": "AES-128", "count": 1, "severity": "warning"},
+            {"algorithm": "RSA", "count": 1, "severity": "warning"},
+        ]
+
+    def test_info_findings_are_excluded_from_both_shapes(self, merge_client):
+        """The repository scan's RSA finding is info and the website scan's
+        SHA-1 finding is info. Neither counts, and RSA appears only because
+        the certificate finding is a warning."""
+        body = merge_client.get("/admin/stats").json()
+        rows = {row["algorithm"]: row for row in body["algorithms_most_found"]}
+        assert "SHA-1" not in rows
+        assert rows["RSA"]["count"] == 1
+
+    def test_repeat_scans_of_one_site_are_counted_together(self, merge_client):
+        body = merge_client.get("/admin/stats").json()
+        assert body["most_scanned_websites"] == [
+            {"target_url": SECOND_SITE, "scan_count": 2}
+        ]
+
+    def test_the_severity_totals_still_read_repository_scans_only(self, merge_client):
+        """Untouched by this change, and asserted here because the website
+        documents in this fixture have no severity_summary to add."""
+        body = merge_client.get("/admin/stats").json()
+        assert body["severity_totals"] == {
+            "critical": 1,
+            "warning": 0,
+            "safe": 0,
+            "info": 1,
+        }
+
+
+class TestMergeAlgorithmsRanking:
+    """The merge function on its own, for the property no fixture makes
+    obvious: it ranks the sum, not the two lists it was handed."""
+
+    def test_an_algorithm_below_the_cut_on_both_sides_can_rank_second(self):
+        repository = [
+            {"_id": "A", "count": 10, "severities": ["critical"]},
+            {"_id": "B", "count": 8, "severities": ["critical"]},
+            {"_id": "C", "count": 7, "severities": ["warning"]},
+            {"_id": "D", "count": 6, "severities": ["warning"]},
+            {"_id": "E", "count": 5, "severities": ["safe"]},
+            {"_id": "F", "count": 4, "severities": ["warning"]},
+        ]
+        website = [{"_id": "F", "count": 5, "severities": ["critical"]}]
+        merged = _merge_algorithms(repository, website)
+        # F is sixth on one side and alone on the other; 4 + 5 puts it second.
+        # Taking the top five of each list first would have dropped the 4 and
+        # left F tied with E at 5, which is the ranking this guards against.
+        assert [row["algorithm"] for row in merged] == ["A", "F", "B", "C", "D"]
+        assert merged[1] == {"algorithm": "F", "count": 9, "severity": "critical"}
+
+    def test_severities_from_both_sides_are_ranked_together(self):
+        merged = _merge_algorithms(
+            [{"_id": "RSA", "count": 1, "severities": ["warning"]}],
+            [{"_id": "RSA", "count": 1, "severities": ["critical"]}],
+        )
+        assert merged == [{"algorithm": "RSA", "count": 2, "severity": "critical"}]
+
+    def test_a_row_with_no_algorithm_name_is_dropped(self):
+        merged = _merge_algorithms(
+            [{"_id": None, "count": 3, "severities": ["critical"]}],
+            [{"_id": "", "count": 2, "severities": ["critical"]}],
+        )
+        assert merged == []
+
+    def test_no_aggregates_at_all_is_an_empty_list(self):
+        assert _merge_algorithms([], []) == []
 
 
 class TestAdminScanListWithAMixedCollection:
