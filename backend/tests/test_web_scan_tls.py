@@ -814,16 +814,31 @@ class TestInternalHostnamesAreRefusedAsWell:
 
 
 class TestTheGuardUnitLevel:
-    """tls_scanner's guard, called directly -- no HTTP, no router."""
+    """What this file still owns of the guard: how *TLS scanning* uses it.
 
-    def test_resolve_and_validate_raises_before_returning_anything(self, monkeypatch):
-        monkeypatch.setattr(tls_scanner, "_resolve", lambda host: ["192.168.1.5"])
-        with pytest.raises(tls_scanner.BlockedTargetError):
-            tls_scanner.resolve_and_validate(TARGET_HOST)
+    The validator itself moved to ssrf_guard.py when the HTTP header check
+    needed the same decision, and its unit tests moved with it to
+    test_ssrf_guard.py. The endpoint-level SSRF tests above stayed here, because
+    they are testing that this endpoint is wired to the guard rather than
+    testing the guard.
+    """
 
-    def test_resolve_and_validate_returns_every_public_address(self, monkeypatch):
-        monkeypatch.setattr(tls_scanner, "_resolve", lambda host: [PUBLIC_IP, "8.8.8.8"])
-        assert tls_scanner.resolve_and_validate(TARGET_HOST) == [PUBLIC_IP, "8.8.8.8"]
+    def test_the_tls_scanner_uses_the_shared_guard_rather_than_its_own_copy(self):
+        """The point of the extraction: one validator, not two.
+
+        A second copy of this logic is the one that would be subtly wrong, so
+        the import is asserted rather than assumed.
+        """
+        import inspect
+
+        import ssrf_guard
+
+        assert tls_scanner.validate_target is ssrf_guard.validate_target
+        source = inspect.getsource(tls_scanner)
+        assert "from ssrf_guard import" in source
+        # None of the guard's internals were left behind as a private copy.
+        for leftover in ("_blocked_reason", "_reject_blocked_address", "_resolve("):
+            assert f"def {leftover}" not in source
 
     def test_the_handshake_is_never_given_a_hostname_to_resolve(self):
         """DNS rebinding defence: _handshake connects to an address, not a name.
@@ -924,10 +939,15 @@ class TestTheRouteIsRateLimitedPerAccount:
             scan(client)
         response = scan(client)
         assert response.status_code == 429
-        assert response.json()["detail"] == (
-            "Rate limit exceeded: 10 requests per 1 day. Try again in 1 day."
-        )
-        assert "1440 minutes" not in response.json()["detail"]
+        detail = response.json()["detail"]
+        assert detail.startswith("Rate limit exceeded: 10 requests per 1 day.")
+        assert "1440 minutes" not in detail
+        assert "86400s" not in detail
+        # Loose on the remaining wait: it is the window minus however long the
+        # ten requests took, so it renders as "1 day" or "24 hours" depending
+        # on machine speed. Pinning one makes this fail on a slow day rather
+        # than on a real regression.
+        assert "Try again in 1 day." in detail or "Try again in 24 hours." in detail
 
     def test_the_retry_after_header_is_still_raw_seconds(self, client, network):
         """The header is machine-read, so the friendlier units must not reach it."""
@@ -1224,7 +1244,16 @@ class TestTheRouterIsRegistered:
             assert f"app.include_router({name}" in source
 
     def test_the_route_is_declared_at_the_specified_path(self):
+        """This file asserts its own route is there, not the router's whole set.
+
+        It used to assert the set was exactly {"/web-scan/tls"}, which was true
+        while this was the only endpoint on the router and became wrong the
+        moment /web-scan/headers was added alongside it. Owning the full set
+        from here would mean every future Level 1 endpoint has to edit the TLS
+        test file to be allowed to exist; test_web_scan_headers.py asserts the
+        complete set in one place instead.
+        """
         paths = {
             route.path for route in web_scan_router.routes if hasattr(route, "path")
         }
-        assert paths == {"/web-scan/tls"}
+        assert "/web-scan/tls" in paths

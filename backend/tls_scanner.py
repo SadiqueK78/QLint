@@ -1,33 +1,22 @@
 """Level 1 scanning: what a website's TLS actually negotiates, over the wire.
 
 Every other scanner in QLint reads source code. This one opens a socket to a
-host somebody typed into a form, which makes it the first piece of the backend
-that can be pointed at a network the caller cannot otherwise reach. So the
-order of operations here is not incidental, it is the whole design:
+host somebody typed into a form. Deciding whether that host may be connected to
+at all is not this module's job -- it is ssrf_guard's, which is where the URL
+parsing, DNS resolution and address blocklist now live, because a second
+feature (HTTP security headers) needs exactly the same decision and a validator
+named for TLS is the wrong thing for it to import.
 
-    parse the URL  ->  resolve the name  ->  judge every resolved address
-                   ->  connect to the address that was judged
+What stays here is everything TLS-specific: the handshake, the certificate, and
+the classification of both against CRYPTO_DB.
 
-The last step is the one that is easy to get wrong. Resolving a name, deciding
-the answer is acceptable, and then handing the *name* to ssl/socket to connect
-means the name is resolved a second time, and nothing says the second answer
-matches the first -- a DNS server the attacker controls can return a public
-address to the check and 127.0.0.1 to the connection a moment later. That is
-DNS rebinding, and it defeats a validator that looks correct line by line. So
-`_handshake` takes an IP address, never a hostname, and carries the hostname
-along only as the SNI/verification name. There is exactly one resolution.
-
-Two layers guard the target, and they are not equal:
-
-  * The real control is address classification (`_reject_blocked_address`).
-    Every address the name resolves to is checked, not merely the first,
-    because a name with an A record for a public host and a second A record
-    for 127.0.0.1 would otherwise pass and then connect to whichever the OS
-    picked.
-  * Hostname pattern matching (`_reject_internal_hostname`) is a courtesy
-    layer on top. It catches `localhost` and `*.internal` early with a clearer
-    message, and it is bypassable by anyone who can publish DNS, which is why
-    it is never the thing standing between a caller and the metadata service.
+One rule from the guard reaches into this file and has to be honoured here:
+`_handshake` takes an IP address, never a hostname. The guard resolved the name
+once and judged the answer; handing the *name* to ssl/socket would resolve it a
+second time, and nothing says the second answer matches the first -- a DNS
+server the attacker controls can return a public address to the check and
+127.0.0.1 to the connection a moment later. The hostname travels only as the
+SNI/verification name. There is exactly one resolution.
 
 Scope is deliberately small: https only, port 443 only, no redirects, no
 following anything the target says. The endpoint reports on the exact host it
@@ -35,23 +24,43 @@ was given or it fails.
 """
 
 import asyncio
-import ipaddress
-import re
 import socket
 import ssl
 from datetime import datetime, timezone
-from urllib.parse import urlsplit
 
 from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric import dsa, ec, ed448, ed25519, rsa
 
 from scanner_common import normalize_attack_vector
+from ssrf_guard import (
+    HTTPS_PORT,
+    BlockedTargetError,
+    InvalidTargetURLError,
+    SSRFGuardError,
+    TargetResolutionError,
+    parse_target,
+    validate_target,
+)
 from vulnerability_db import find_algorithm, get_severity_score
 
-# The only port this endpoint will ever talk to. Hardcoded rather than taken
-# from the URL: a caller-chosen port turns a TLS inspector into a port scanner
-# that runs from the backend's address and reports the results.
-TLS_PORT = 443
+# Re-exported under this module's own name because the port is part of the TLS
+# story here (443 is where TLS lives), and because `raw.connect((ip_address,
+# TLS_PORT))` reads better in _handshake than a generic constant would.
+TLS_PORT = HTTPS_PORT
+
+# Names kept importable from this module so nothing that already depends on
+# tls_scanner for them has to learn about ssrf_guard. They are the guard's
+# types, not this module's -- the aliases exist for compatibility, not to
+# suggest a TLS scan owns them.
+__all__ = [
+    "BlockedTargetError",
+    "InvalidTargetURLError",
+    "SSRFGuardError",
+    "TLSConnectionError",
+    "TLSScanError",
+    "TargetResolutionError",
+    "scan_url",
+]
 
 # Two bounds, because they fail differently. The handshake timeout is what the
 # socket itself enforces, so a host that accepts the connection and then says
@@ -66,311 +75,8 @@ class TLSScanError(Exception):
     """Base for every failure this module reports."""
 
 
-class InvalidTargetURLError(TLSScanError):
-    """The URL is not something this endpoint will accept. Caller's fault."""
-
-
-class BlockedTargetError(TLSScanError):
-    """The target resolves somewhere this server must not connect to."""
-
-
 class TLSConnectionError(TLSScanError):
     """The target was allowed, and talking to it failed."""
-
-
-# ---------------------------------------------------------------------------
-# Target parsing
-# ---------------------------------------------------------------------------
-
-# Suffixes that name a network rather than a site. Advisory only -- see the
-# module docstring on why this list is not the control.
-_INTERNAL_SUFFIXES = (
-    ".local",
-    ".localhost",
-    ".localdomain",
-    ".internal",
-    ".intranet",
-    ".lan",
-    ".corp",
-    ".private",
-    ".home.arpa",
-    ".svc",
-    ".svc.cluster.local",
-    ".cluster.local",
-    ".in-addr.arpa",
-    ".ip6.arpa",
-)
-
-_INTERNAL_NAMES = {
-    "localhost",
-    "metadata",
-    "metadata.google.internal",
-    "metadata.goog",
-    "instance-data",
-    "instance-data.ec2.internal",
-}
-
-# A hostname is a run of dot-separated labels. Checked before the name reaches
-# the resolver so that nothing exotic (a trailing null, an embedded slash that
-# survived parsing) is ever handed to getaddrinfo.
-_HOSTNAME_RE = re.compile(
-    r"^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?"
-    r"(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$"
-)
-
-
-class Target:
-    """A validated https://host:443 the scanner is willing to look at."""
-
-    def __init__(self, hostname: str, url: str) -> None:
-        self.hostname = hostname
-        self.url = url
-        self.port = TLS_PORT
-
-    def __repr__(self) -> str:  # pragma: no cover - debugging aid
-        return f"Target({self.hostname}:{self.port})"
-
-
-def parse_target(raw_url: str) -> Target:
-    """Turn a caller's string into a Target, or explain why it is not one.
-
-    Nothing here touches the network; this runs before a name is resolved.
-    """
-    if not isinstance(raw_url, str) or not raw_url.strip():
-        raise InvalidTargetURLError("Provide a URL to scan, for example https://example.com")
-
-    text = raw_url.strip()
-
-    # No scheme means no scan. Guessing https:// would be convenient and wrong:
-    # the caller would never be told which target was actually inspected, and
-    # "example.com:8080" parses as scheme "example.com" -- a silent default
-    # turns that into a connection nobody asked for.
-    if "://" not in text:
-        raise InvalidTargetURLError(
-            "The URL needs an explicit scheme. Supply the target as "
-            f"https://{text} rather than {text}."
-        )
-
-    try:
-        parts = urlsplit(text)
-    except ValueError as exc:
-        raise InvalidTargetURLError(f"That URL could not be parsed: {exc}") from exc
-
-    scheme = (parts.scheme or "").lower()
-    if scheme == "http":
-        raise InvalidTargetURLError(
-            "Only https:// targets can be TLS-inspected. An http:// URL has no "
-            "TLS layer to report on -- there is no handshake, no cipher suite "
-            "and no certificate. Supply the https:// address of the same site."
-        )
-    if scheme != "https":
-        raise InvalidTargetURLError(
-            f"Unsupported scheme '{scheme or parts.scheme}'. This endpoint scans "
-            "https:// URLs only."
-        )
-
-    # Credentials in the authority are a target-confusion trick, not a feature
-    # anyone needs here: https://real.example.com@169.254.169.254/ reads as the
-    # public host to a human and resolves as the metadata address.
-    if parts.username is not None or parts.password is not None:
-        raise InvalidTargetURLError(
-            "Remove the credentials from the URL. This endpoint scans a host's "
-            "TLS configuration and never authenticates to it."
-        )
-
-    try:
-        port = parts.port
-    except ValueError as exc:
-        raise InvalidTargetURLError(f"That URL has an invalid port: {exc}") from exc
-    if port is not None and port != TLS_PORT:
-        raise InvalidTargetURLError(
-            f"Only port {TLS_PORT} is scanned in this phase, and this URL asks "
-            f"for port {port}. Drop the port from the URL to scan {TLS_PORT}."
-        )
-
-    hostname = (parts.hostname or "").strip().rstrip(".").lower()
-    if not hostname:
-        raise InvalidTargetURLError("That URL has no hostname to connect to.")
-
-    # An IPv6 literal never reaches _HOSTNAME_RE, so classify it as an address
-    # here and let the address guard judge it like any other resolved answer.
-    hostname = _to_ascii(hostname)
-    if not _is_ip_literal(hostname) and not _HOSTNAME_RE.match(hostname):
-        raise InvalidTargetURLError(f"'{hostname}' is not a valid hostname.")
-
-    _reject_internal_hostname(hostname)
-    return Target(hostname, text)
-
-
-def _to_ascii(hostname: str) -> str:
-    """The IDNA form of a name, so the resolver sees what the guard checked.
-
-    Encoding here rather than leaving it to getaddrinfo keeps one spelling of
-    the name throughout: the name that is pattern-checked, the name that is
-    resolved and the SNI name sent in the handshake are the same bytes.
-    """
-    if hostname.isascii():
-        return hostname
-    try:
-        return hostname.encode("idna").decode("ascii")
-    except UnicodeError as exc:
-        raise InvalidTargetURLError(
-            f"'{hostname}' is not a hostname this scanner can resolve: {exc}"
-        ) from exc
-
-
-def _is_ip_literal(hostname: str) -> bool:
-    try:
-        ipaddress.ip_address(hostname)
-        return True
-    except ValueError:
-        return False
-
-
-def _reject_internal_hostname(hostname: str) -> None:
-    """The advisory layer: names that describe a private network.
-
-    Deliberately runs before resolution so an obvious internal name fails with
-    a message about the name. The address check afterwards is what actually
-    holds, and it runs whether or not this one fired.
-    """
-    if hostname in _INTERNAL_NAMES or hostname.endswith(_INTERNAL_SUFFIXES):
-        raise BlockedTargetError(
-            f"'{hostname}' names an internal network rather than a public "
-            "site, so it will not be scanned."
-        )
-    # A single label with no dot is a host on the local network, not a site on
-    # the internet: ICANN does not delegate dotless names.
-    if "." not in hostname and not _is_ip_literal(hostname):
-        raise BlockedTargetError(
-            f"'{hostname}' is not a fully qualified domain name, so it can "
-            "only refer to a host on this server's own network."
-        )
-
-
-# ---------------------------------------------------------------------------
-# Address classification -- the actual SSRF control
-# ---------------------------------------------------------------------------
-
-
-def _embedded_addresses(ip):
-    """The IPv4 addresses an IPv6 address can be carrying inside it.
-
-    ::ffff:127.0.0.1 is loopback wearing an IPv6 costume, and 2002::/16 and
-    Teredo do the same thing with a public-looking prefix. Classifying only
-    the outer address would wave all three through.
-    """
-    if not isinstance(ip, ipaddress.IPv6Address):
-        return []
-    embedded = []
-    for candidate in (ip.ipv4_mapped, ip.sixtofour):
-        if candidate is not None:
-            embedded.append(candidate)
-    teredo = ip.teredo
-    if teredo is not None:
-        embedded.extend(teredo)
-    return embedded
-
-
-def _blocked_reason(ip) -> str | None:
-    """Why this address is off limits, or None if it is a public address."""
-    # Named individually rather than collapsed into `not is_global` so that the
-    # reason handed back says which rule fired -- and so that reading this
-    # function tells you what is blocked without consulting the stdlib.
-    checks = (
-        (ip.is_loopback, "a loopback address"),
-        (ip.is_private, "a private address"),
-        (ip.is_link_local, "a link-local address"),
-        (ip.is_reserved, "a reserved address"),
-        (ip.is_multicast, "a multicast address"),
-        (ip.is_unspecified, "an unspecified address"),
-    )
-    for failed, reason in checks:
-        if failed:
-            return reason
-    # Everything the six flags above miss and the stdlib still considers
-    # non-routable: carrier-grade NAT, the documentation ranges, benchmarking
-    # space, 240.0.0.0/4. None of it hosts a site worth scanning, and all of it
-    # can reach somewhere interesting from inside a hosting provider.
-    if not ip.is_global:
-        return "not a globally routable address"
-    return None
-
-
-def _reject_blocked_address(ip_text: str, hostname: str) -> None:
-    """Raise unless this resolved address is one the server may connect to."""
-    try:
-        ip = ipaddress.ip_address(ip_text)
-    except ValueError as exc:
-        raise BlockedTargetError(
-            f"'{hostname}' resolved to something that is not an IP address."
-        ) from exc
-
-    for candidate in (ip, *_embedded_addresses(ip)):
-        reason = _blocked_reason(candidate)
-        if reason is None:
-            continue
-        # 169.254.169.254 is already caught by is_link_local; it is called out
-        # by name because "link-local" does not tell a user what nearly
-        # happened, and this is the address that makes SSRF worth exploiting.
-        if str(candidate) == "169.254.169.254":
-            raise BlockedTargetError(
-                f"'{hostname}' resolves to 169.254.169.254, the cloud instance "
-                "metadata endpoint. This scanner will not connect to it."
-            )
-        raise BlockedTargetError(
-            f"'{hostname}' resolves to {ip}, which is {reason}. This scanner "
-            "only connects to public internet hosts."
-        )
-
-
-def _resolve(hostname: str) -> list[str]:
-    """Every address this name has, resolved once and returned in full.
-
-    getaddrinfo rather than gethostbyname: it answers for both address
-    families, and the guard needs the complete answer. A name whose first
-    record is public and whose second is 127.0.0.1 must fail, so the caller
-    checks all of these and connects only after all of them pass.
-    """
-    try:
-        answers = socket.getaddrinfo(
-            hostname, TLS_PORT, proto=socket.IPPROTO_TCP, type=socket.SOCK_STREAM
-        )
-    except socket.gaierror as exc:
-        raise TLSConnectionError(
-            f"DNS lookup failed for '{hostname}': the name does not resolve "
-            f"({exc.strerror or exc})."
-        ) from exc
-    except OSError as exc:
-        raise TLSConnectionError(
-            f"DNS lookup failed for '{hostname}': {exc}"
-        ) from exc
-
-    addresses: list[str] = []
-    for family, _type, _proto, _canonname, sockaddr in answers:
-        if family not in (socket.AF_INET, socket.AF_INET6):
-            continue
-        address = sockaddr[0]
-        if address not in addresses:
-            addresses.append(address)
-
-    if not addresses:
-        raise TLSConnectionError(
-            f"DNS lookup for '{hostname}' returned no usable IP address."
-        )
-    return addresses
-
-
-def resolve_and_validate(hostname: str) -> list[str]:
-    """Resolve a name and return its addresses, or raise before any connection.
-
-    The whole list is validated. Returning early on the first acceptable
-    address would mean a name only has to be *partly* public to be scanned.
-    """
-    addresses = _resolve(hostname)
-    for address in addresses:
-        _reject_blocked_address(address, hostname)
-    return addresses
 
 
 # ---------------------------------------------------------------------------
@@ -1264,28 +970,45 @@ def summarize(findings: list[dict]) -> dict:
 async def scan_url(raw_url: str) -> dict:
     """Validate, resolve, guard, handshake, parse, classify.
 
-    The whole thing is bounded by OVERALL_TIMEOUT_SECONDS. The blocking work
-    runs in a worker thread so a slow target stalls that thread rather than the
-    event loop, and the socket's own 5-second timeouts mean the thread cannot
-    outlive the request by more than one handshake attempt even though
-    asyncio.wait_for cannot interrupt it.
+    The whole thing is bounded by OVERALL_TIMEOUT_SECONDS, DNS included: the
+    guard's lookup runs inside the timed section, so a resolver that hangs
+    cannot hold a worker past the budget. The blocking work runs in worker
+    threads so a slow target stalls a thread rather than the event loop, and
+    the socket's own 5-second timeouts mean such a thread cannot outlive the
+    request by more than one handshake attempt even though asyncio.wait_for
+    cannot interrupt it.
     """
-    target = parse_target(raw_url)  # raises before anything is resolved
     try:
         return await asyncio.wait_for(
-            _resolve_and_inspect(target), timeout=OVERALL_TIMEOUT_SECONDS
+            _resolve_and_inspect(raw_url), timeout=OVERALL_TIMEOUT_SECONDS
         )
     except asyncio.TimeoutError as exc:
         raise TLSConnectionError(
-            f"The scan of {target.hostname} did not finish within "
+            f"The scan of {_name_for_message(raw_url)} did not finish within "
             f"{OVERALL_TIMEOUT_SECONDS:.0f} seconds and was abandoned."
         ) from exc
 
 
-async def _resolve_and_inspect(target: Target) -> dict:
-    addresses = await asyncio.to_thread(resolve_and_validate, target.hostname)
+def _name_for_message(raw_url: str) -> str:
+    """The host to name in a timeout message, without trusting the parse.
+
+    Only ever called on the timeout path, where the URL already parsed once --
+    but a message-formatting helper that can raise is how the certificate
+    handling sprouted a 500 in Phase 1, so this one cannot.
+    """
+    try:
+        return parse_target(raw_url).hostname
+    except Exception:  # pragma: no cover - the URL parsed to get this far
+        return "the target"
+
+
+async def _resolve_and_inspect(raw_url: str) -> dict:
+    # The shared guard: parses, resolves once, and judges every address it got
+    # back. Identical call to the one header_scanner makes.
+    target = await validate_target(raw_url)
+    addresses = target.addresses
     # Connect to the address that was just judged, not to the name.
-    address = addresses[0]
+    address = target.address
 
     verification_error: str | None = None
     try:
