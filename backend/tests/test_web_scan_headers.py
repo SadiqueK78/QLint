@@ -646,11 +646,23 @@ class TestTheTwoEndpointsHaveIndependentBuckets:
 
 
 class TestTheRouteIsRegistered:
-    def test_both_web_scan_paths_are_declared(self):
+    def test_the_route_is_declared_at_the_specified_path(self):
+        """This file asserts its own route is there, not the router's whole set.
+
+        It used to assert the set was exactly {"/web-scan/tls",
+        "/web-scan/headers"}, which was true while those were the only two
+        endpoints on the router and became wrong the moment
+        /web-scan/javascript was added alongside them -- the same way the TLS
+        file's version of this test broke when this endpoint was added. Owning
+        the full set from here would mean every future Level 1 endpoint has to
+        edit an older phase's test file to be allowed to exist. The newest
+        phase's file asserts the complete set in one place instead, which is
+        currently test_web_scan_javascript.py.
+        """
         paths = {
             route.path for route in web_scan_router.routes if hasattr(route, "path")
         }
-        assert paths == {"/web-scan/tls", "/web-scan/headers"}
+        assert "/web-scan/headers" in paths
 
     def test_main_still_mounts_the_router_once(self):
         """Read rather than imported: main pulls in oqs via benchmark_router."""

@@ -38,6 +38,8 @@ from pydantic import BaseModel
 from auth import get_current_user
 from header_scanner import HeaderScanError
 from header_scanner import scan_url as header_scan_url
+from js_web_scanner import JSWebScanError
+from js_web_scanner import scan_url as js_scan_url
 from rate_limit import RateLimiter, rate_limit_by_user
 from ssrf_guard import (
     BlockedTargetError,
@@ -82,6 +84,17 @@ _limiter = RateLimiter(max_requests=10, window_seconds=86400)
 # visitor onto one internal address (see rate_limit.client_key).
 _HEADERS_WINDOW_SECONDS = 86400
 _headers_limiter = RateLimiter(max_requests=20, window_seconds=_HEADERS_WINDOW_SECONDS)
+
+# A third bucket, independent of both. The JavaScript scan does the most work
+# of the three -- fetch the page, then up to twenty more fetches to whatever
+# hosts the page names, then run every one of them through js_scanner -- so a
+# single request here can mean twenty-one outbound connections to third
+# parties. Fifteen a day sits between the TLS scan's ten and the header check's
+# twenty: more headroom than TLS because a page's JavaScript changes more often
+# than its certificate, less than the header check because it costs far more to
+# serve. Same per-account keying as the other two.
+_JS_WINDOW_SECONDS = 86400
+_js_limiter = RateLimiter(max_requests=15, window_seconds=_JS_WINDOW_SECONDS)
 
 
 def _http_error(exc: Exception, url: str, what: str) -> HTTPException:
@@ -164,3 +177,34 @@ async def scan_website_headers(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except Exception as exc:
         raise _http_error(exc, body.url, "header scan") from exc
+
+
+@router.post(
+    "/web-scan/javascript", dependencies=[Depends(rate_limit_by_user(_js_limiter))]
+)
+async def scan_website_javascript(
+    body: WebScanRequest, user: dict = Depends(get_current_user)
+):
+    """Find the JavaScript a page serves and scan it for vulnerable crypto.
+
+    Same request shape, same https-only rule and the same ssrf_guard as the two
+    endpoints above -- and one thing neither of them needs: every external
+    <script src> is a URL of its own, pointing wherever the page's author
+    chose, so each one is validated through the guard independently before it
+    is fetched. A safe page naming an internal script host is exactly the hole
+    that would otherwise reopen.
+
+    Two separate things come back. `references` is the inventory of every
+    script the page mentions and what became of it; `findings` is what
+    js_scanner made of the code actually read. A page whose scripts were all
+    skipped is a 200 with an empty findings list and a full inventory saying
+    why -- not an error.
+    """
+    try:
+        return await js_scan_url(body.url)
+    except JSWebScanError as exc:
+        # The page itself could not be read, so there is nothing to report on.
+        # A script that fails is never this: it is skipped and inventoried.
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:
+        raise _http_error(exc, body.url, "JavaScript scan") from exc
