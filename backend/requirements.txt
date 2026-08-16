@@ -5,6 +5,11 @@ httpx>=0.28.0
 motor>=3.4
 pymongo>=4.7
 python-jose[cryptography]>=3.3
+# Already present transitively via python-jose's [cryptography] extra, and now
+# imported directly by tls_scanner.py to parse X.509 certificates off the wire.
+# Pinned to 42+ because that is where the not_valid_before_utc/_utc accessors
+# arrived; the older naive-datetime properties are deprecated.
+cryptography>=42.0
 passlib[bcrypt]>=1.7
 python-multipart>=0.0.9
 pytest>=8.0

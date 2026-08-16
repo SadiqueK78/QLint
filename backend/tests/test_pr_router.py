@@ -1302,8 +1302,16 @@ class TestRateLimit:
 
         blocked = create(client)
         assert blocked.status_code == 429
-        assert "Rate limit exceeded" in blocked.json()["detail"]
-        assert blocked.headers["Retry-After"]
+        detail = blocked.json()["detail"]
+        # This route's window is 3600s, which is the hours tier -- singular,
+        # so "1 hour" rather than "1 hours".
+        assert detail == (
+            f"Rate limit exceeded: {module._limiter.max_requests} requests "
+            "per 1 hour. Try again in 1 hour."
+        )
+        # The header is untouched by the message formatting: RFC 9110 says
+        # seconds, and a client parses it.
+        assert blocked.headers["Retry-After"].isdigit()
 
     def test_the_limit_caps_pull_requests_actually_created(
         self, client, github, generator, patch_cache, scan_owner

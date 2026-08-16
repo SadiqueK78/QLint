@@ -17,6 +17,7 @@ from routers.patch_router import router as patch_router
 from routers.pr_router import router as pr_router
 from routers.scan_router import router as scan_router
 from routers.user_router import router as user_router
+from routers.web_scan_router import router as web_scan_router
 
 load_dotenv()
 
@@ -97,6 +98,10 @@ app.include_router(hndl_router, tags=["hndl"])
 # Needs the liboqs native library. benchmark_router mounts either way and
 # answers 503 where liboqs is absent, so a Windows-native dev run still boots.
 app.include_router(benchmark_router, tags=["benchmark"])
+# Level 1: live TLS/certificate scanning. The only router that connects to a
+# host named in a request body rather than to GitHub, so its target validation
+# is a security control -- see tls_scanner.py.
+app.include_router(web_scan_router, tags=["web-scan"])
 
 
 @app.get("/health")

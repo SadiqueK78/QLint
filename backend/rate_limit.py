@@ -24,6 +24,7 @@ looping the endpoint; a multi-worker deployment that needs a hard global cap
 should move this state into Mongo or Redis.
 """
 
+import math
 import time
 from collections import defaultdict, deque
 
@@ -34,6 +35,37 @@ from auth import get_current_user
 # Above this many tracked clients, expired windows are swept before the next
 # admission decision. Bounds memory without sweeping on every request.
 _SWEEP_THRESHOLD = 1024
+
+# Largest unit first: the first one the duration reaches is the one it is
+# described in.
+_DURATION_UNITS: tuple[tuple[int, str], ...] = (
+    (86400, "day"),
+    (3600, "hour"),
+    (60, "minute"),
+    (1, "second"),
+)
+
+
+def format_duration(seconds: float) -> str:
+    """A duration in the largest unit that fits, for a message a human reads.
+
+    Every window used to be described in minutes regardless of size, which was
+    fine while the longest was an hour and became unreadable when web_scan
+    arrived with a day: "10 requests per 1440 minutes. Try again in 86400s."
+
+    Rounds up, which matters only for the "try again in" half. That number
+    counts down as the window slides, so it is rarely a whole unit -- and
+    rounding down would tell someone to come back before their allowance has
+    actually refilled, which sends them straight into another 429. Overstating
+    the wait by under a unit is the harmless direction. Every window currently
+    configured (10 minutes, 1 hour, 1 day) divides exactly, so the window half
+    of the message is unaffected either way.
+    """
+    for size, name in _DURATION_UNITS:
+        if seconds >= size:
+            count = math.ceil(seconds / size)
+            return f"{count} {name}{'' if count == 1 else 's'}"
+    return "1 second"  # sub-second, and "0 seconds" would read as "no wait"
 
 
 class RateLimiter:
@@ -71,9 +103,13 @@ class RateLimiter:
                 status_code=429,
                 detail=(
                     f"Rate limit exceeded: {self.max_requests} requests per "
-                    f"{int(self.window_seconds // 60)} minutes. "
-                    f"Try again in {retry_after}s."
+                    f"{format_duration(self.window_seconds)}. "
+                    f"Try again in {format_duration(retry_after)}."
                 ),
+                # Stays raw seconds: Retry-After is defined by RFC 9110 as a
+                # number of seconds or an HTTP-date, and it is parsed by
+                # clients rather than read by people. Only the human sentence
+                # above changes units.
                 headers={"Retry-After": str(retry_after)},
             )
         hits.append(now)
