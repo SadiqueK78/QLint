@@ -1,6 +1,8 @@
 // Static content page. The team list lives here rather than in a config file
 // because nothing else reads it and there is no server to fetch it from.
 
+import { GitHubIcon } from "./icons";
+
 // The project guide, listed above the team and separated from it by a rule.
 // Kept as its own value rather than a fourth TEAM entry because the divider
 // has to fall in exactly one place, and a flag on a list item to say "draw a
@@ -45,11 +47,15 @@ function TeamCard({ member }) {
       <div className="team-links">
         {member.github && (
           <a
-            className="team-link"
+            className="team-link team-link-icon"
             href={member.github}
             target="_blank"
             rel="noopener noreferrer"
           >
+            {/* 14 against this card's 13px text. The LinkedIn link beside it
+                keeps its plain label: this adds the mark that exists, rather
+                than inventing a second one for symmetry. */}
+            <GitHubIcon size={14} />
             GitHub
           </a>
         )}

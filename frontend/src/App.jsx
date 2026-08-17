@@ -8,7 +8,7 @@ import Terms from "./Terms";
 import Privacy from "./Privacy";
 import { CopyButton, FixPanels } from "./FixPanels";
 import WebsiteResultsView from "./WebsiteResults";
-import { ChevronIcon } from "./icons";
+import { ChevronIcon, GitHubIcon } from "./icons";
 import { API_BASE } from "./api";
 import { formatDateTime, scoreClass } from "./format";
 
@@ -307,27 +307,8 @@ function PersonIcon({ size = 16 }) {
   );
 }
 
-/** Simple geometric octocat: round head, two ears, a tentacle stub. */
-function GitHubIcon({ stroke = "#FFFFFF", size = 16 }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke={stroke}
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <circle cx="12" cy="12" r="7.5" />
-      <path d="M7 5.5 L6 2.5 L9 4" />
-      <path d="M17 5.5 L18 2.5 L15 4" />
-      <path d="M9.5 21.5 v-3 a2.5 2.5 0 0 1 5 0 v3" />
-    </svg>
-  );
-}
+// GitHubIcon used to be defined here. It moved to ./icons when About.jsx
+// needed the same glyph -- see the note at the top of that file.
 
 // One dismiss glyph for every close/delete affordance, so the scan-history
 // entries, the history panel, the auth modal, and the notice banner stop each
@@ -545,6 +526,10 @@ function Navbar({
                             : startGithubOAuth
                         }
                       >
+                        {/* 12 to match this control's 12px text -- the
+                            smallest placement in the app, and the modal's 16
+                            would tower over an underlined inline link. */}
+                        <GitHubIcon size={12} />
                         {user.github_connected ? "Disconnect" : "Connect"}
                       </button>
                     </div>
@@ -607,11 +592,14 @@ function Navbar({
                   // creates the account on first use and signs in on every use
                   // after, so there is no second door to offer.
                   <button
-                    className="account-menu-item"
+                    className="account-menu-item account-menu-item-icon"
                     type="button"
                     role="menuitem"
                     onClick={fromAccountMenu(onSignIn)}
                   >
+                    {/* 14 against this menu's 13px text: a step down from the
+                        modal's 16, which is sized for 14px. */}
+                    <GitHubIcon size={14} />
                     Sign in with GitHub
                   </button>
                 )}
@@ -684,7 +672,7 @@ function Navbar({
                 keeps its own copy of the GitHub controls: it is the menu a
                 narrow viewport opens by habit. */}
             <button
-              className="sidebar-item"
+              className="sidebar-item sidebar-item-icon"
               type="button"
               onClick={() => {
                 closeSidebar();
@@ -692,6 +680,7 @@ function Navbar({
                 else startGithubOAuth();
               }}
             >
+              <GitHubIcon />
               {user.github_connected ? "Disconnect GitHub" : "Connect GitHub"}
             </button>
             {/* The write connection is managed separately from the one above,
@@ -722,13 +711,14 @@ function Navbar({
           </>
         ) : (
           <button
-            className="sidebar-item"
+            className="sidebar-item sidebar-item-icon"
             type="button"
             onClick={() => {
               closeSidebar();
               onSignIn();
             }}
           >
+            <GitHubIcon />
             Sign in with GitHub
           </button>
         )}
@@ -2551,7 +2541,7 @@ function SignInModal({ onClose }) {
           type="button"
           onClick={startGithubOAuth}
         >
-          <GitHubIcon stroke="currentColor" />
+          <GitHubIcon />
           Continue with GitHub
         </button>
 

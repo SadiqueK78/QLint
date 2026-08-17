@@ -1,26 +1,34 @@
 # QLint — PQC Migration Scanner
 
-Scan GitHub repositories for quantum-vulnerable cryptographic algorithms and get NIST PQC 2024 compliant migration reports.
+Scan GitHub repositories and live websites for quantum-vulnerable cryptographic algorithms and get NIST PQC 2024 compliant migration reports.
 
 **Live app:** https://qlint-frontend.onrender.com
 
 ## What it does
 
-QLint scans the Python, JavaScript, TypeScript, Go, Java, and Rust code in any public GitHub repository and detects cryptographic algorithms that will be broken (RSA, ECC, DSA, Diffie-Hellman) or weakened (AES-128, SHA-256) by quantum computers. Python detection is AST-based — it parses real syntax trees instead of grepping text, so algorithm names in comments or strings never produce false positives. JavaScript and TypeScript have no stdlib parser to lean on, so they are scanned with context-aware patterns that strip comments and string noise before matching.
+QLint scans two kinds of target: the source code in a GitHub repository, and a live website as a browser meets it. Both produce findings in the same shape — an algorithm, a severity, the quantum attack vector, and a recommendation — and both roll up into the same 0-to-100 PQC readiness score.
 
-Every finding comes with a severity rating, the quantum attack vector, and a ready-to-use fix snippet showing the migration to the NIST-standardized post-quantum replacement (ML-KEM, ML-DSA, SLH-DSA). Any finding can also be explained in plain English or turned into a copy-paste unified diff, both generated against your actual code. The whole repository is summarized into a PQC readiness score from 0 to 100.
+Repository scanning covers the Python, JavaScript, TypeScript, Go, Java, and Rust code in any public GitHub repository and detects cryptographic algorithms that will be broken (RSA, ECC, DSA, Diffie-Hellman) or weakened (AES-128, SHA-256) by quantum computers. Python detection is AST-based — it parses real syntax trees instead of grepping text, so algorithm names in comments or strings never produce false positives. JavaScript and TypeScript have no stdlib parser to lean on, so they are scanned with context-aware patterns that strip comments and string noise before matching.
+
+Every code finding comes with a severity rating, the quantum attack vector, and a ready-to-use fix snippet showing the migration to the NIST-standardized post-quantum replacement (ML-KEM, ML-DSA, SLH-DSA). Any finding can also be explained in plain English or turned into a copy-paste unified diff, both generated against your actual code. The whole repository is summarized into a PQC readiness score from 0 to 100.
+
+Website scanning points at a URL instead of a repository and reports on what that host actually serves, in three parts. The TLS connection: the protocol version, the cipher suite and key exchange it negotiates, and the certificate's public key and signature algorithm, each rated against the same algorithm database a code scan uses. The HTTP security headers it returns: HSTS, Content-Security-Policy, X-Content-Type-Options, X-Frame-Options and Referrer-Policy, each reported whether it passes or fails, because "we checked this and it is fine" is the half you need in order to trust the other half. And the JavaScript the page runs — inline scripts and the ones it references — put through the same JavaScript scanner the repository path uses, so a finding on a live site and a finding in a checkout are the same object. Results are grouped by category, filterable by algorithm, and any single finding can be explained in plain English the way a code finding can.
 
 Beyond the scan, QLint includes a PQC Benchmark Lab — real, on-demand liboqs execution comparing ML-KEM/ML-DSA/SLH-DSA against RSA/ECDSA performance and key sizes on this server, not looked-up figures — and an HNDL (Harvest Now, Decrypt Later) risk calculator, which frames a scan's findings against how long the underlying data needs to stay confidential.
 
 ## Architecture
 
-QLint is a standard three-tier web app, plus a standalone CLI that reuses the same scanning core outside the web stack: a React/Vite frontend talks to a FastAPI backend, which talks to MongoDB for persistence and to two external services — the GitHub API for repo/file fetching, and OpenRouter for AI explain/patch generation.
+QLint is a standard three-tier web app, plus a standalone CLI that reuses the same scanning core outside the web stack: a React/Vite frontend talks to a FastAPI backend, which talks to MongoDB for persistence and outward to the GitHub API for repo/file fetching, to OpenRouter for AI explain/patch generation, and — for website scans only — to whatever host the user named.
 
 Scanning pipeline: a scan request resolves a GitHub repo, walks its files by extension, and routes each file to a language-specific scanner (ast_scanner.py for Python, pattern-based scanners for JS/TS/Go/Java/Rust). Each scanner shares common helpers — line/position tracking, comment-stripping, snippet extraction — through scanner_common.py, so every finding across every language carries the same shape: algorithm, severity, attack vector, and both the vulnerable code and its fix as real, position-accurate snippets. scanner_engine.py orchestrates this whether the source is a GitHub repo (web app) or a local directory (CLI/CI), so both paths run identical detection logic.
 
+Website scanning pipeline: a website scan takes a URL and runs three independent checks against it — tls_scanner.py opens the connection and classifies the negotiated protocol, cipher suite and certificate, header_scanner.py reads the response headers, and js_web_scanner.py collects the page's inline and referenced scripts and hands each one to scanner_engine.py, so website JavaScript goes through js_scanner.py rather than through a second copy of it. The three run together as one combined report. Because the target arrives in a request body rather than from configuration, every outbound connection — the page itself and each external script URL separately — is cleared by ssrf_guard.py first: it resolves the name once, judges every address that comes back, and hands the caller the address to connect to, so the name is never resolved a second time on the way to the socket.
+
 Report generation: the scan output feeds three formats — the app's native JSON report, SARIF 2.1.0 (for GitHub Code Scanning and other SARIF viewers), and CycloneDX 1.6 CBOM (a standard cryptography-asset inventory for tracking migration progress across a codebase or fleet). A fourth download, the CycloneDX 1.6 SBOM, is not derived from the scan at all: it reads the scanned repository's own root dependency manifests (requirements.txt, package.json, go.mod, pom.xml, Cargo.toml) when the download is requested, and reports which languages it could not cover rather than silently omitting them.
 
-AI features: the explain and patch endpoints call OpenRouter, grounding every prompt in the real surrounding file content (not just the isolated flagged line) so generated patches match actual indentation and context rather than hallucinating structure. Both are cached in MongoDB, keyed by finding content, so identical vulnerable code anywhere shares one cached result.
+Website scans export CBOM and nothing else. That is a scope decision rather than a gap: a CBOM is an inventory of cryptographic assets, and an RSA key on a live certificate is the same kind of asset as an RSA key in source, so the website path reuses the repository path's component shape with the URL standing in for the file path. SARIF describes results at file locations in source code, and the SBOM is built by reading a repository's own dependency manifests — neither has a meaning for a host being talked to over the network.
+
+AI features: the explain and patch endpoints call OpenRouter, grounding every prompt in the real surrounding file content (not just the isolated flagged line) so generated patches match actual indentation and context rather than hallucinating structure. Both are cached in MongoDB, keyed by finding content, so identical vulnerable code anywhere shares one cached result. Website findings are explained by a separate module (web_explainer.py) rather than a branch inside the code explainer: a missing header or a weak cipher suite has no file, line or snippet to build a prompt around, and the reader is as likely to be the person who owns the site as the person who wrote it.
 
 One-click PR creation: the flagship feature applies AI-generated patches directly to a user's repository through a real pull request. It uses a separate, explicitly-granted OAuth scope from the read-only scanning connection, re-validates every file against GitHub immediately before patching (skipping anything that changed since the scan rather than guessing), and conservatively skips overlapping findings in the same file rather than merging them automatically.
 
@@ -31,7 +39,8 @@ One-click PR creation: the flagship feature applies AI-generated patches directl
 - Auth: GitHub OAuth only, with a JWT session (python-jose)
 - Frontend: React 18, Vite
 - Scanners: Python ast module; context-aware pattern matching for JS/TS/Go/Java/Rust
-- Output: SARIF 2.1.0, CycloneDX 1.6 CBOM, CycloneDX 1.6 SBOM, native JSON
+- Website scans: ssl/socket for the TLS handshake, cryptography for certificate parsing, httpx for headers and scripts
+- Output: SARIF 2.1.0, CycloneDX 1.6 CBOM, CycloneDX 1.6 SBOM, native JSON (website scans: CBOM only)
 - CI: standalone CLI and a composite GitHub Action, no server or database needed
 - PQC: liboqs, compiled from source in the backend Docker image
 - Standards: NIST FIPS 203, 204, 205 (2024)
@@ -53,6 +62,11 @@ QLint/
 │   ├── go_scanner.py            (Go)
 │   ├── java_scanner.py          (Java)
 │   ├── rust_scanner.py          (Rust)
+│   ├── tls_scanner.py           (website: TLS handshake + certificate)
+│   ├── header_scanner.py        (website: HTTP security headers)
+│   ├── js_web_scanner.py        (website: page scripts -> js_scanner.py)
+│   ├── ssrf_guard.py            (clears every user-named outbound target)
+│   ├── web_explainer.py         (plain-English explain for website findings)
 │   ├── scanner_engine.py        (orchestration: GitHub repo or local directory)
 │   ├── sarif_converter.py       (scan report -> SARIF 2.1.0)
 │   ├── cbom_converter.py        (scan report -> CycloneDX 1.6 CBOM)
@@ -104,7 +118,7 @@ Two test modules import liboqs through pqc_benchmark.py — tests/test_pqc_bench
 
 ## Use QLint in CI
 
-backend/qlint_cli.py is a standalone scanner: it walks a directory already on disk and needs no server, database, credentials, or GitHub API calls. It runs the same scanners and emits the same SARIF/CBOM output as the web app. SBOM output is web-only — it is built by reading the repository's dependency manifests from GitHub, which is exactly the API access the CLI is designed not to need.
+backend/qlint_cli.py is a standalone scanner: it walks a directory already on disk and needs no server, database, credentials, or GitHub API calls. It runs the same scanners and emits the same SARIF/CBOM output as the web app. SBOM output is web-only — it is built by reading the repository's dependency manifests from GitHub, which is exactly the API access the CLI is designed not to need. Website scanning is web-only for the same kind of reason: it is a scan of a live host over the network, and the CLI's whole premise is a directory already on disk.
 
 ```bash
 python backend/qlint_cli.py --path . --output qlint-results.sarif
@@ -122,6 +136,8 @@ TypeScript (.ts, .tsx) — context-aware pattern matching
 Go (.go) — context-aware pattern matching
 Java (.java) — context-aware pattern matching
 Rust (.rs) — context-aware pattern matching
+
+These are the repository scanners. A website scan reuses the JavaScript one for the scripts a page serves; its TLS and header checks are not tied to a language at all.
 
 ## Contributing
 

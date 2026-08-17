@@ -287,6 +287,19 @@ input {
   color: #ffffff;
 }
 
+/* .sidebar-item is already flex and already centres its content, so an
+   icon-bearing row needs nothing but the gap. 10 rather than the modal's 8:
+   these rows are 44px tall with 20px side padding, and the sidebar's spacing
+   is looser than a button's throughout. The class is separate because every
+   other sidebar row -- the nav pages, Log out -- is text alone. */
+.sidebar-item-icon {
+  gap: 10px;
+}
+
+.sidebar-item-icon svg {
+  flex-shrink: 0;
+}
+
 .sidebar-item-active {
   background: rgba(255, 255, 255, 0.12);
   color: #ffffff;
@@ -3399,6 +3412,16 @@ input {
   white-space: nowrap;
 }
 
+/* Only the GitHub link carries a mark; the LinkedIn one beside it stays a
+   plain label, so this is its own class rather than a change to .team-link.
+   inline-flex keeps the pill sizing the bordered link already has, and gap 7
+   sits between the modal's 8 and the padding of this smaller 13px control. */
+.team-link-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
 .team-link:hover {
   background: var(--bg);
   border-color: var(--text-muted);
@@ -3990,6 +4013,16 @@ input {
   background: var(--bg);
 }
 
+/* Only the entries that carry a glyph. .account-menu-item is display:block and
+   shared with Admin and Log out, which have no icon and must keep their plain
+   text layout. Gap 8 matches .auth-github-btn, the sign-in control this one is
+   the menu's equivalent of. */
+.account-menu-item-icon {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 /* A status line plus its control, for the two GitHub grants. These are not
    .account-menu-items: the row itself does nothing, only the control on its
    right does, so the whole row must not look clickable. */
@@ -4021,8 +4054,15 @@ input {
   white-space: nowrap;
 }
 
+/* inline-flex rather than block so the mark sits on the text's own line and
+   centres against it. The gap is 5 rather than .auth-github-btn's 8: this is
+   12px underlined text, and the modal's spacing is scaled for 14px in a
+   full-width button. */
 .account-menu-link {
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   background: transparent;
   border: none;
   padding: 0;
@@ -4031,6 +4071,12 @@ input {
   color: var(--info);
   text-decoration: underline;
   cursor: pointer;
+}
+
+/* The row this sits in is tight, and the label beside the mark can grow to
+   "Disconnect"; without this the glyph is the thing that gets squashed. */
+.account-menu-link svg {
+  flex-shrink: 0;
 }
 
 .account-menu-sep {
@@ -4081,7 +4127,16 @@ input {
 
 /* The scan-mode picker, sitting in front of the URL field. Sized and outlined
    like .token-toggle -- the other control that shares the scan row -- so the
-   row reads as one strip rather than a select dropped into it. */
+   row reads as one strip rather than a select dropped into it.
+
+   appearance: none is what makes the rest of this block take effect. Without
+   it a native select keeps the platform's own chrome -- its background, its
+   corner radius, its arrow -- and paints over the border, radius, and colours
+   set here, which is why this control read as an unstyled browser select
+   sitting next to a custom-styled input and button. Removing that chrome also
+   removes the arrow, so one is drawn back as a background image: the same
+   chevron geometry ChevronIcon uses elsewhere, inlined because a background
+   image cannot reference a component. */
 .scan-mode-select {
   height: 44px;
   flex-shrink: 0;
@@ -4092,14 +4147,38 @@ input {
   font-family: inherit;
   font-size: 14px;
   font-weight: 500;
-  padding: 0 10px;
   cursor: pointer;
   outline: none;
+
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  /* Room on the right for the chevron, so a long option label cannot run
+     underneath it. */
+  padding: 0 34px 0 14px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230f172a' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9 L12 15 L18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 12px 12px;
+}
+
+/* Matches .token-toggle:hover, the control beside it. */
+.scan-mode-select:hover {
+  background-color: var(--bg);
 }
 
 .scan-mode-select:focus {
   border-color: var(--navy);
   box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.08);
+}
+
+/* The open dropdown list is drawn by the platform, not by this rule, so it
+   does not inherit the control's colours. Naming both explicitly keeps the
+   options readable in the dark theme, where an inherited-white list would be
+   white text on white. */
+.scan-mode-select option {
+  background: var(--surface);
+  color: var(--text-primary);
 }
 
 /* ------------------------------------------------ website scan: report */
@@ -4209,15 +4288,31 @@ input {
 
 /* ------------------------------------- website scan: dark theme */
 
+/* Border and text follow .token-toggle's dark treatment, the control beside
+   it in the row. The chevron is repeated rather than inherited because its
+   colour is baked into the data URI: the light rule draws it in --navy, which
+   would be all but invisible against a dark control. */
 [data-theme="dark"] .scan-mode-select {
   color: #ffffff;
   border-color: rgba(255, 255, 255, 0.25);
-  background: var(--surface);
+  background-color: var(--surface);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9 L12 15 L18 9'/%3E%3C/svg%3E");
+}
+
+[data-theme="dark"] .scan-mode-select:hover {
+  background-color: rgba(255, 255, 255, 0.08);
 }
 
 [data-theme="dark"] .scan-mode-select:focus {
   border-color: #00ff41;
   box-shadow: 0 0 0 3px rgba(0, 255, 65, 0.12);
+}
+
+/* The platform-drawn option list again: --surface is #111111 in this theme,
+   so the list follows the control instead of staying white. */
+[data-theme="dark"] .scan-mode-select option {
+  background: var(--surface);
+  color: #ffffff;
 }
 
 /* .web-warning needs no dark rule of its own: it is painted entirely from

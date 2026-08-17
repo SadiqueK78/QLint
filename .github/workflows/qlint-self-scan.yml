@@ -35,12 +35,33 @@ jobs:
           #                              by file, so a new detection test does
           #                              not break the build on the way in.
           #
+          #   backend/tls_scanner.py     Same reason as pqc_benchmark.py, one
+          #                              level further out. To report what
+          #                              algorithm a site's certificate uses,
+          #                              this module has to import the types it
+          #                              is classifying against:
+          #                              `from cryptography.hazmat.primitives
+          #                              .asymmetric import dsa, ec, ed448,
+          #                              ed25519, rsa`. Those names are used in
+          #                              isinstance() checks on a certificate
+          #                              somebody else served -- QLint generates
+          #                              no keys and performs no crypto here.
+          #                              The AST scanner flags names imported
+          #                              from crypto packages, which is right
+          #                              everywhere except in the code whose job
+          #                              is naming those algorithms.
+          #
           # Deliberately NOT excluded: production files that merely use SHA-256
-          # non-cryptographically (e.g. explain_router.py's cache key). Those
-          # surface as warning/info, which fail-on:critical does not fail the
-          # build over, and muting a shipped file would hide a real finding in
-          # it later.
-          exclude: backend/pqc_benchmark.py,backend/tests/test_*.py
+          # non-cryptographically (e.g. explain_router.py's and
+          # web_scan_router.py's cache keys). Those surface as warning/info,
+          # which fail-on:critical does not fail the build over, and muting a
+          # shipped file would hide a real finding in it later.
+          #
+          # Nothing else in the website-scanning code needs excluding:
+          # header_scanner.py, js_web_scanner.py and ssrf_guard.py name no
+          # algorithms, and web_scan_router.py's only finding is the SHA-256
+          # cache key above.
+          exclude: backend/pqc_benchmark.py,backend/tests/test_*.py,backend/tls_scanner.py
 
       # always(): a scan that fails the build is the case whose results are
       # most worth seeing in the Security tab, and the step above exits 1 there.

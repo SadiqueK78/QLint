@@ -22,6 +22,48 @@ const FAQ = [
     ],
   },
   {
+    q: "How do I scan a website instead of a repository?",
+    a: [
+      "Use the dropdown to the left of the scan field on the home page and change it from Repository to Website. The field and the button change with it: paste the address of the site you want to look at, such as https://example.com, and press Scan Website.",
+      "A website scan looks at a live site as it is served to a browser right now, where a repository scan reads source code. They answer different questions, so neither replaces the other, and both are saved under your account and listed together in My Scans.",
+    ],
+  },
+  {
+    q: "What does a website scan actually check?",
+    a: [
+      "Three things, all of them what an ordinary visitor's browser would see. First, the secure connection itself: which version of TLS the site negotiates, the encryption it agrees to use, and the certificate it presents, including what signed that certificate and how long it is still valid for. Second, the response headers the site sends back, the settings that tell a browser how strictly to treat the connection. Third, the JavaScript the page pulls in, which QLint fetches and reads for cryptographic code the same way it reads a repository.",
+      "The point of all three is the same as a repository scan: finding cryptography that a quantum computer would break. The difference is that nothing here needs access to your source code, so you can point it at any public site, including one you did not build.",
+    ],
+  },
+  {
+    q: "Why does my website report say some checks did not run?",
+    a: [
+      "A report covers three checks, and when one cannot complete the other results are still shown rather than the whole scan being thrown away. The report names each check that did not run and why, so a partial answer never looks like a clean one.",
+      "The most common reason is a site whose certificate has expired or is otherwise not valid. The certificate check copes with that on purpose, because an expired certificate is itself worth reporting, so that section fills in normally and tells you what is wrong with it. The header and JavaScript checks cannot: both need a working secure connection before there is anything to read, and on that site there is not one. So a scan of a site with a bad certificate typically gives you a full certificate section and those two checks marked as not run.",
+    ],
+  },
+  {
+    q: "Why can't I scan an internal or private website?",
+    a: [
+      "Only public sites, reachable from the open internet, can be scanned. An address on a private network, a machine on your own computer, or anything else that is only visible from inside a network is refused before the scan starts.",
+      "This is a safety rule rather than a limitation we expect to lift. A website scan is performed by QLint's own servers rather than by your browser, so the sites it will agree to visit are deliberately limited to ones anybody could visit anyway. Scanning code that is not public is what repository scanning is for, and that works on private repositories once you have connected an account that can read them.",
+    ],
+  },
+  {
+    q: "How many website scans can I run a day?",
+    a: [
+      "Five a day, counted against your account. A website scan reaches out to somebody else's server and does real work there, so the limit keeps QLint from looking like a nuisance to the sites being scanned.",
+      "It is a separate allowance from repository scanning: running website scans does not use up repository scans, and repository scans do not use up website scans. The allowance refills as the day rolls forward rather than resetting at a fixed hour, so the earliest of your five becomes available again twenty-four hours after you used it.",
+    ],
+  },
+  {
+    q: "Do the CBOM download and Explain with AI work for website scans?",
+    a: [
+      "Both work. Explain with AI sits on a website finding exactly as it does on a code finding, and returns the same kind of short plain-language account of what the finding means and what fixing it would involve. The CBOM download is on the results page and inventories the cryptography the scan found on that site.",
+      "CBOM is the only report you can download from a website scan, and SARIF and SBOM are not offered. Both of those describe a codebase: SARIF annotates findings against files and line numbers, which a live site does not have, and an SBOM lists the dependencies declared in a repository's manifests, which are not visible from outside. A CBOM is an inventory of cryptography in use, which is exactly what a website scan produces.",
+    ],
+  },
+  {
     q: "What do Critical, Warning, Safe, and Info mean?",
     a: [
       "Critical means a quantum computer breaks the algorithm outright and it must be migrated: RSA, ECC, and Ed25519, along with MD5 and SHA-1, which are already broken classically.",
