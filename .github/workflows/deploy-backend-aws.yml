@@ -30,12 +30,12 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
-          aws-region: ap-south-1
+          aws-region: us-east-1
 
       - name: Deploy to Elastic Beanstalk
-        uses: aws-actions/aws-elasticbeanstalk-deploy@v1
+        uses: aws-actions/aws-elasticbeanstalk-deploy@v1.0.4
         with:
-          aws-region: ap-south-1
+          aws-region: us-east-1
           application-name: qlint
-          environment-name: qlint-backend
+          environment-name: Qlint-env
           deployment-package-path: qlint-backend.zip
