@@ -45,7 +45,7 @@ jobs:
           #                              ed25519, rsa`. Those names are used in
           #                              isinstance() checks on a certificate
           #                              somebody else served -- QLint generates
-          #                              no keys and performs no crypto here.
+          #                              no keys and performs no crypto here
           #                              The AST scanner flags names imported
           #                              from crypto packages, which is right
           #                              everywhere except in the code whose job
