@@ -35,7 +35,7 @@ WORKDIR /build
 # requirements-pqc.txt is the file that carries liboqs-python. It is kept
 # separate from requirements.txt precisely so a Windows-native setup can skip
 # it; in this image it is exactly what we want, so both are installed.
-COPY requirements.txt requirements-pqc.txt ./
+COPY backend/requirements.txt backend/requirements-pqc.txt ./
 RUN pip install --no-cache-dir -r requirements.txt -r requirements-pqc.txt
 
 # Build liboqs at the version the installed liboqs-python binding expects,
@@ -110,7 +110,7 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
 WORKDIR /app
-COPY . .
+COPY backend/ .
 
 # Drop privileges. The home directory is real and owned by the user so that
 # nothing in the stack falls over trying to write a cache into a read-only
