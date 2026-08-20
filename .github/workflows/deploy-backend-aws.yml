@@ -26,23 +26,6 @@ jobs:
             -x "__pycache__/*" \
             -x ".venv/*"
 
-      # TEMPORARY DEBUG STEP
-      - name: Show GitHub OIDC claims
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const token = await core.getIDToken('sts.amazonaws.com');
-            const payload = JSON.parse(
-              Buffer.from(token.split('.')[1], 'base64url').toString()
-            );
-
-            console.log('SUB:', payload.sub);
-            console.log('AUD:', payload.aud);
-            console.log('REPOSITORY:', payload.repository);
-            console.log('REPOSITORY_ID:', payload.repository_id);
-            console.log('REPOSITORY_OWNER:', payload.repository_owner);
-            console.log('REPOSITORY_OWNER_ID:', payload.repository_owner_id);
-
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
