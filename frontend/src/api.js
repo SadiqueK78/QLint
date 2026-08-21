@@ -6,7 +6,7 @@
 // so a deployed image has to be rebuilt (or built with the value) to move --
 // changing the variable next to an already-built dist/ does nothing. The
 // fallback keeps `npm run dev` working with no .env present at all.
-const configured = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const configured = import.meta.env.VITE_API_URL || "http://qlint-production.up.railway.app";
 
 // Every caller writes `${API_BASE}/some/path`, so a trailing slash on the
 // configured value would produce "//some/path". Cheaper to strip it here than
